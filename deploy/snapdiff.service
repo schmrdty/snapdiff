@@ -1,0 +1,33 @@
+[Unit]
+Description=snapdiff (read-only Snapchain vs Hypersnap comparator)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=snapdiff
+Group=snapdiff
+WorkingDirectory=/srv/snapdiff
+# All config comes from the env file; every value has a default in src/config.ts.
+EnvironmentFile=/srv/snapdiff/.env
+Environment=NODE_ENV=production
+Environment=PORT=8787
+Environment=DB_PATH=/srv/snapdiff/data/snapdiff.db
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning /srv/snapdiff/dist/src/index.js
+Restart=always
+RestartSec=5
+# Hardening: the process needs the network, its own tree, and nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/snapdiff/data /srv/snapdiff/reports
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
