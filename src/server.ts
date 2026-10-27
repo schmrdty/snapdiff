@@ -1,0 +1,148 @@
+import { Hono } from "hono";
+import type { Config } from "./config.js";
+import type { Store } from "./store/store.js";
+import { CAUSES, type Cause, type DiffRow, type InfoSnapshot, type Side, type StallRow } from "./types.js";
+
+const esc = (s: string): string =>
+  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+
+const ago = (ms: number | null, now: number): string => {
+  if (ms === null) return "never";
+  const s = Math.round((now - ms) / 1000);
+  if (s < 90) return `${s}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  return `${Math.round(s / 3600)}h ago`;
+};
+
+const dur = (fromMs: number, toMs: number): string => {
+  const s = Math.round((toMs - fromMs) / 1000);
+  if (s < 90) return `${s}s`;
+  if (s < 5400) return `${Math.round(s / 60)}m`;
+  return `${(s / 3600).toFixed(1)}h`;
+};
+
+const CAUSE_HELP: Record<Cause, string> = {
+  unexplained: "Valid under both rule sets, still missing. Investigate these.",
+  pending: "Too new to judge, or the missing node is behind.",
+  relay_filtered: "Filtered type, or a FID registered on one network only. Expected by design.",
+  version_rule: "Uses V21/V22 rules only one side enforces. Expected.",
+  sync_lag: "Arrived late on the missing side. Expected.",
+};
+
+const isCause = (v: string | undefined): v is Cause => v !== undefined && (CAUSES as readonly string[]).includes(v);
+
+export function buildApp(cfg: Config, store: Store): Hono {
+  const app = new Hono();
+  const label = (s: Side) => (s === "a" ? cfg.a.label : cfg.b.label);
+
+  app.get("/api/summary", async (c) => {
+    const [summary, a, b] = await Promise.all([store.summary(), store.latestInfo("a"), store.latestInfo("b")]);
+    return c.json({ nodes: { a: cfg.a.label, b: cfg.b.label }, summary, info: { a, b } });
+  });
+
+  app.get("/api/diffs", async (c) => {
+    const cause = c.req.query("cause");
+    const limit = Math.min(Number(c.req.query("limit") ?? 200) || 200, 5000);
+    if (cause !== undefined && !isCause(cause)) return c.json({ error: `cause must be one of ${CAUSES.join(", ")}` }, 400);
+    const rows = await store.listDiffs({ ...(cause !== undefined ? { cause } : {}), limit });
+    return c.json(rows.map(({ messageJson, ...r }) => ({ ...r, message: JSON.parse(messageJson) as unknown })));
+  });
+
+  app.get("/api/stalls", async (c) => {
+    const limit = Math.min(Number(c.req.query("limit") ?? 200) || 200, 5000);
+    return c.json(await store.listStalls({ limit }));
+  });
+
+  app.get("/", async (c) => {
+    const now = Date.now();
+    const [summary, ia, ib, unexplained, pending, stalls] = await Promise.all([
+      store.summary(),
+      store.latestInfo("a"),
+      store.latestInfo("b"),
+      store.listDiffs({ cause: "unexplained", limit: 100 }),
+      store.listDiffs({ cause: "pending", limit: 25 }),
+      store.listStalls({ limit: 50 }),
+    ]);
+    const openStall = (side: Side, shardId: number) => stalls.some((s) => s.side === side && s.shardId === shardId && s.endedAt === null);
+
+    const nodeCard = (side: Side, i: InfoSnapshot | null) => {
+      const status = i === null ? "no data" : i.reachable ? "up" : "down";
+      const cls = i?.reachable ? "ok" : "bad";
+      const shards =
+        i?.shards
+          .slice()
+          .sort((x, y) => x.shardId - y.shardId)
+          .map(
+            (s) =>
+              `<tr><td>${s.shardId}${openStall(side, s.shardId) ? ` <span class="pill bad">stalled</span>` : ""}</td><td>${s.maxHeight.toLocaleString()}</td><td>${s.blockDelay}</td></tr>`,
+          )
+          .join("") ?? "";
+      return `<section class="card">
+        <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span></h2>
+        <p class="muted">${esc(side === "a" ? cfg.a.url : cfg.b.url)} · checked ${ago(i?.at ?? null, now)}</p>
+        ${i?.error ? `<p class="bad-text">${esc(i.error)}</p>` : ""}
+        ${shards ? `<table><thead><tr><th>Shard</th><th>Height</th><th>Block delay</th></tr></thead><tbody>${shards}</tbody></table>` : ""}
+      </section>`;
+    };
+
+    const counts = (["unexplained", "pending", "relay_filtered", "version_rule", "sync_lag"] as const)
+      .map(
+        (k) => `<div class="stat ${k}"><div class="n">${summary.byCause[k]}</div><div class="k">${k.replace("_", " ")}</div>
+        <div class="help">${CAUSE_HELP[k]}</div></div>`,
+      )
+      .join("");
+
+    const rowsHtml = (rows: DiffRow[]) =>
+      rows.length === 0
+        ? `<p class="muted">None.</p>`
+        : `<div class="scroll"><table><thead><tr><th>First seen</th><th>FID</th><th>Shard</th><th>Hash</th><th>On</th><th>Missing on</th><th>Note</th></tr></thead><tbody>
+          ${rows
+            .map(
+              (r) => `<tr><td>${ago(r.firstSeen, now)}</td><td>${r.fid}</td><td>${r.shard ?? "?"}</td><td class="mono">${esc(r.hash.slice(0, 18))}…</td>
+              <td>${esc(label(r.presentOn))}</td><td>${esc(label(r.missingOn))}</td><td>${esc(r.note ?? "")}</td></tr>`,
+            )
+            .join("")}</tbody></table></div>`;
+
+    const stallsHtml = (rows: StallRow[]) =>
+      rows.length === 0
+        ? `<p class="muted">None recorded.</p>`
+        : `<div class="scroll"><table><thead><tr><th>Node</th><th>Shard</th><th>Started</th><th>Duration</th><th>Stuck at</th><th>Peer reached</th><th>Worst delay</th></tr></thead><tbody>
+          ${rows
+            .map(
+              (s) => `<tr><td>${esc(label(s.side))}</td><td>${s.shardId}</td><td>${new Date(s.startedAt).toISOString().replace("T", " ").slice(0, 19)}Z</td>
+              <td>${s.endedAt === null ? `<span class="pill bad">ongoing ${dur(s.startedAt, now)}</span>` : dur(s.startedAt, s.endedAt)}</td>
+              <td>${s.stuckHeight.toLocaleString()}</td><td>${(s.peerHeightEnd ?? s.peerHeightStart).toLocaleString()}</td><td>${s.maxBlockDelay}s</td></tr>`,
+            )
+            .join("")}</tbody></table></div>`;
+
+    return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30">
+<title>snapdiff</title>
+<style>
+:root{--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66;--card:#fff;--line:#e3e2dd;--ok:#2f7d4f;--bad:#b3261e;--warn:#9a6700}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--muted:#9c9b95;--card:#1d1d1b;--line:#33322f;--ok:#5cc58a;--bad:#f2867c;--warn:#e0b44c}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:20px 16px}h1{font-size:20px;margin:0 0 4px}h2{font-size:16px;margin:0 0 4px}
+.muted{color:var(--muted);margin:0 0 8px}.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin:16px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+.stats{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin:16px 0}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}.stat .n{font-size:28px;font-weight:650}
+.stat .k{text-transform:uppercase;font-size:12px;letter-spacing:.05em;color:var(--muted)}.stat .help{font-size:13px;color:var(--muted);margin-top:4px}
+.stat.unexplained .n{color:var(--bad)}.stat.pending .n{color:var(--warn)}
+.pill{font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid currentColor}.ok{color:var(--ok)}.bad,.bad-text{color:var(--bad)}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-weight:600;color:var(--muted)}.mono{font-family:ui-monospace,monospace}.scroll{overflow-x:auto}
+</style></head><body><main>
+<h1>snapdiff: ${esc(cfg.a.label)} vs ${esc(cfg.b.label)}</h1>
+<p class="muted">${summary.scans} scans · last scan ${ago(summary.lastScanAt, now)} · refreshes every 30s · read-only</p>
+<div class="stats">${counts}</div>
+<div class="grid">${nodeCard("a", ia)}${nodeCard("b", ib)}</div>
+<section class="card" style="margin-bottom:12px"><h2>Shard stalls${summary.openStalls > 0 ? ` <span class="pill bad">${summary.openStalls} ongoing</span>` : ""}</h2>
+<p class="muted">A shard on one node stopped advancing while the same shard on the other node kept going. Diffs on a stalled shard stay pending until it recovers.</p>${stallsHtml(stalls)}</section>
+<section class="card"><h2>Unexplained</h2><p class="muted">Missing on ${esc(cfg.a.label)}: ${summary.byMissingSide.a} · missing on ${esc(cfg.b.label)}: ${summary.byMissingSide.b}</p>${rowsHtml(unexplained)}</section>
+<section class="card" style="margin-top:12px"><h2>Pending</h2>${rowsHtml(pending)}</section>
+</main></body></html>`);
+  });
+
+  return app;
+}

@@ -1,0 +1,31 @@
+# snapdiff public dashboard. Cherry VPS, Caddy with automatic TLS.
+#
+# Privacy posture: no `log` directive, so Caddy records no visitor IPs.
+# Errors go to journald without request bodies. The dashboard is read-only
+# data about two public networks; there is nothing private behind it.
+
+{
+	admin off
+	# email you@example.com   # optional: ACME expiry notices
+}
+
+snapdiff.schmidtiest.xyz {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		-Server
+	}
+
+	# To gate the whole site behind a password later: uncomment this block,
+	# generate the hash on the VPS with `caddy hash-password`, paste it in,
+	# then `sudo systemctl reload caddy`.
+	# basic_auth {
+	# 	viewer <hash-from-caddy-hash-password>
+	# }
+
+	reverse_proxy 127.0.0.1:8787
+}

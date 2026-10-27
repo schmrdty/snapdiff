@@ -1,0 +1,30 @@
+{
+  "name": "snapdiff",
+  "version": "0.4.0",
+  "description": "Read-only comparator for two Farcaster-protocol nodes (Snapchain and Hypersnap). Diffs messages by hash and classifies each difference by cause.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node --disable-warning=ExperimentalWarning dist/src/index.js",
+    "dev": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx src/index.ts",
+    "report": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx src/report.ts",
+    "check-nodes": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/check-nodes.ts",
+    "mock": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/mock-hubs.ts",
+    "test": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "hono": "^4.13.13",
+    "viem": "^2.57.11"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
