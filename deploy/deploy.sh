@@ -18,6 +18,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 echo "== typecheck + build =="
 npm run typecheck
+npm audit --omit=dev --audit-level=high
 npm run build
 
 echo "== ship =="
