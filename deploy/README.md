@@ -61,9 +61,23 @@ Write down the IPv4 address the portal shows. Everything below uses `<IP>`.
 
 9. Preflight against the real nodes (same command the README documents, run on the VPS where the env lives):
 
-   `ssh snapdiff 'cd /srv/snapdiff && sudo -u snapdiff env $(sudo cat .env | xargs) node --disable-warning=ExperimentalWarning dist/scripts/check-nodes.js 3'`
+   `ssh snapdiff 'cd /srv/snapdiff && sudo -u snapdiff node --env-file=/srv/snapdiff/.env --disable-warning=ExperimentalWarning dist/scripts/check-nodes.js 3'`
+
+   (Load the env with Node's `--env-file`, never by sourcing or `xargs`: both strip the quotes out of the JSON in `NODE_A_HEADERS`.)
 
 Repeat step 7 after every code change. Step 3 is safe to re-run.
+
+## Watchlist on the server
+
+Keep the real FID list in `data/`, which `deploy.sh` never touches and git never sees (the `watch-fids.txt` in the repo is an empty example). One-time setup:
+
+`ssh snapdiff 'sudo -u snapdiff touch /srv/snapdiff/data/watch-fids.txt && sudo sed -i "s#^WATCH_FIDS_FILE=.*#WATCH_FIDS_FILE=/srv/snapdiff/data/watch-fids.txt#" /srv/snapdiff/.env && sudo systemctl restart snapdiff'`
+
+Edit it any time (commas, spaces, or one per line; `#` comments), then restart:
+
+`ssh -t snapdiff 'sudo -u snapdiff nano /srv/snapdiff/data/watch-fids.txt && sudo systemctl restart snapdiff && sleep 3 && sudo journalctl -u snapdiff -n 3 -o cat --no-pager | grep watchlist'`
+
+Sizing: each scan fetches every watched FID on both nodes (one request per 100 casts), so 300 watched FIDs at the default 15-minute interval is about 40 requests a minute plus the random sample, well inside a starter Neynar plan with `CONCURRENCY=2`. Past that, raise `SCAN_INTERVAL_MIN`.
 
 ## Operations
 
