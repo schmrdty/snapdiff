@@ -14,6 +14,14 @@ const ago = (ms: number | null, now: number): string => {
   return `${Math.round(s / 3600)}h ago`;
 };
 
+/** Time until the next scan is due, from the last scan's start and the interval. */
+const nextScanIn = (lastScanMs: number | null, intervalMs: number, now: number): string => {
+  if (lastScanMs === null) return "a moment";
+  const s = Math.max(0, Math.round((lastScanMs + intervalMs - now) / 1000));
+  if (s < 90) return `${s}s`;
+  return `${Math.round(s / 60)}m`;
+};
+
 const dur = (fromMs: number, toMs: number): string => {
   const s = Math.round((toMs - fromMs) / 1000);
   if (s < 90) return `${s}s`;
@@ -92,14 +100,30 @@ export function buildApp(cfg: Config, store: Store): Hono {
       )
       .join("");
 
-    const rowsHtml = (rows: DiffRow[]) =>
+    // Cast text comes out of the stored message JSON; anything unparseable or
+    // non-cast shows as empty rather than breaking the page.
+    const castText = (messageJson: string): string => {
+      try {
+        const m = JSON.parse(messageJson) as { data?: { castAddBody?: { text?: unknown } } };
+        const t = m.data?.castAddBody?.text;
+        return typeof t === "string" ? t : "";
+      } catch {
+        return "";
+      }
+    };
+    const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+
+    // Newest first (the store orders by first_seen DESC); each card scrolls on
+    // its own, so new rows push older ones down instead of off the page.
+    const rowsHtml = (rows: DiffRow[], total: number) =>
       rows.length === 0
         ? `<p class="muted">None.</p>`
-        : `<div class="scroll"><table><thead><tr><th>First seen</th><th>FID</th><th>Shard</th><th>Hash</th><th>On</th><th>Missing on</th><th>Note</th></tr></thead><tbody>
+        : `<p class="muted">Newest ${rows.length} of ${total}; older rows stay in the database and at /api/diffs.</p>
+          <div class="scroll"><table><thead><tr><th>First seen</th><th>FID</th><th>Shard</th><th>Hash</th><th>On</th><th>Missing on</th><th>Cast</th><th>Note</th></tr></thead><tbody>
           ${rows
             .map(
               (r) => `<tr><td>${ago(r.firstSeen, now)}</td><td>${r.fid}</td><td>${r.shard ?? "?"}</td><td class="mono">${esc(r.hash.slice(0, 18))}…</td>
-              <td>${esc(label(r.presentOn))}</td><td>${esc(label(r.missingOn))}</td><td>${esc(r.note ?? "")}</td></tr>`,
+              <td>${esc(label(r.presentOn))}</td><td>${esc(label(r.missingOn))}</td><td class="text">${esc(clip(castText(r.messageJson), 140))}</td><td>${esc(r.note ?? "")}</td></tr>`,
             )
             .join("")}</tbody></table></div>`;
 
@@ -131,16 +155,17 @@ main{max-width:1100px;margin:0 auto;padding:20px 16px}h1{font-size:20px;margin:0
 .stat.unexplained .n{color:var(--bad)}.stat.pending .n{color:var(--warn)}
 .pill{font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid currentColor}.ok{color:var(--ok)}.bad,.bad-text{color:var(--bad)}
 table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
-th{font-weight:600;color:var(--muted)}.mono{font-family:ui-monospace,monospace}.scroll{overflow-x:auto}
+th{font-weight:600;color:var(--muted)}.mono{font-family:ui-monospace,monospace}.scroll{overflow:auto;max-height:420px}
+td.text{white-space:normal;min-width:240px;max-width:460px}
 </style></head><body><main>
 <h1>snapdiff: ${esc(cfg.a.label)} vs ${esc(cfg.b.label)}</h1>
-<p class="muted">${summary.scans} scans · last scan ${ago(summary.lastScanAt, now)} · refreshes every 30s · read-only</p>
+<p class="muted">Scans run every ${Math.round(cfg.scanIntervalMs / 60000)} min: ${summary.scans} so far, last ${ago(summary.lastScanAt, now)}, next in about ${nextScanIn(summary.lastScanAt, cfg.scanIntervalMs, now)}. This page reloads every 30 s. Read-only.</p>
 <div class="stats">${counts}</div>
 <div class="grid">${nodeCard("a", ia)}${nodeCard("b", ib)}</div>
 <section class="card" style="margin-bottom:12px"><h2>Shard stalls${summary.openStalls > 0 ? ` <span class="pill bad">${summary.openStalls} ongoing</span>` : ""}</h2>
 <p class="muted">A shard on one node stopped advancing while the same shard on the other node kept going. Diffs on a stalled shard stay pending until it recovers.</p>${stallsHtml(stalls)}</section>
-<section class="card"><h2>Unexplained</h2><p class="muted">Missing on ${esc(cfg.a.label)}: ${summary.byMissingSide.a} · missing on ${esc(cfg.b.label)}: ${summary.byMissingSide.b}</p>${rowsHtml(unexplained)}</section>
-<section class="card" style="margin-top:12px"><h2>Pending</h2>${rowsHtml(pending)}</section>
+<section class="card"><h2>Unexplained</h2><p class="muted">Missing on ${esc(cfg.a.label)}: ${summary.byMissingSide.a} · missing on ${esc(cfg.b.label)}: ${summary.byMissingSide.b}. Rows are rechecked for ${Math.round(cfg.recheckWindowMs / 3600000)} h; one that turns up on the missing side moves to sync lag and leaves this list.</p>${rowsHtml(unexplained, summary.byCause.unexplained)}</section>
+<section class="card" style="margin-top:12px"><h2>Pending</h2><p class="muted">Seen on one side, not yet old enough or not yet rechecked. Most resolve on their own.</p>${rowsHtml(pending, summary.byCause.pending)}</section>
 </main></body></html>`);
   });
 

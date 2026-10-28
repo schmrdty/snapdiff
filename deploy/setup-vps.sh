@@ -47,7 +47,12 @@ chmod 440 "/etc/sudoers.d/90-$ADMIN_USER"
 
 echo "== ssh hardening (only if a key is in place) =="
 if [ -s "/home/$ADMIN_USER/.ssh/authorized_keys" ]; then
-  cat > /etc/ssh/sshd_config.d/99-snapdiff-harden.conf <<'EOF'
+  # sshd keeps the FIRST value it reads and processes sshd_config.d in
+  # lexical order. Ubuntu cloud images ship 50-cloud-init.conf with
+  # PasswordAuthentication yes, so this drop-in must sort before it (00-),
+  # or password auth silently stays on (caught on Ubuntu 26.04, 2026-10-27).
+  rm -f /etc/ssh/sshd_config.d/99-snapdiff-harden.conf
+  cat > /etc/ssh/sshd_config.d/00-snapdiff-harden.conf <<'EOF'
 PermitRootLogin no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
@@ -89,12 +94,23 @@ ufw allow 443/tcp
 ufw allow 443/udp
 ufw --force enable
 
-echo "== node 24 (NodeSource) =="
+echo "== node 24 =="
+# NodeSource first; on a release newer than their index (Ubuntu 26.04 at
+# launch) it can fail, so fall back to the official tarball in /usr/local,
+# which is distro-independent.
 if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 24 ]; then
-  curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
-  apt-get install -y nodejs
+  if curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && apt-get install -y nodejs; then
+    echo "node via NodeSource"
+  else
+    echo "NodeSource unavailable for this release; installing the official tarball"
+    ARCH="$(dpkg --print-architecture)"; case "$ARCH" in amd64) NARCH=x64;; arm64) NARCH=arm64;; *) echo "unsupported arch $ARCH"; exit 1;; esac
+    NVER="$(curl -fsSL https://nodejs.org/dist/index.json | grep -oE '"version":"v24\.[0-9]+\.[0-9]+"' | head -1 | cut -d'"' -f4)"
+    curl -fsSL "https://nodejs.org/dist/${NVER}/node-${NVER}-linux-${NARCH}.tar.xz" -o /tmp/node.tar.xz
+    tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 && rm -f /tmp/node.tar.xz
+    ln -sf /usr/local/bin/node /usr/bin/node && ln -sf /usr/local/bin/npm /usr/bin/npm
+  fi
 fi
-node --version
+node --version && npm --version
 
 echo "== app user and directories =="
 if ! id "$APP_USER" >/dev/null 2>&1; then

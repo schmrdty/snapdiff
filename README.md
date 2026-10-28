@@ -125,9 +125,22 @@ All storage goes through the `Store` interface in `src/store/store.ts`.
 
 Portability back to SQLite: SpacetimeDB has no export or dump command (`spacetime sql --format json` is the closest). Keep the SpacetimeDB tables column-for-column identical to `SCHEMA` in `src/store/sqlite.ts`, and an `export` command is a loop that reads every row through one `Store` and writes it through the other. Types map directly: `u64` and `i64` to INTEGER, `String` to TEXT, `bool` to INTEGER 0/1, `Option<T>` to NULL. Store times as `u64` milliseconds rather than SpacetimeDB's `Timestamp` (microseconds) so no conversion is needed.
 
+## Watchlist
+
+FIDs that are scanned on every run, on top of `SAMPLE_SIZE` random ones. Two ways to supply them; both accept commas, spaces, or one per line, and `#` comments:
+
+1. `WATCH_FIDS=3,5650,239` in the environment.
+2. `WATCH_FIDS_FILE=/path/to/watch-fids.txt`, a plain text file. The `watch-fids.txt` in this repo is an empty example.
+
+On a deployed server keep the real list outside the deployed tree (for example in `data/`, see `deploy/README.md`), so a redeploy does not overwrite it and the roster never enters version control. Only add an account with its owner's say-so: the dashboard and `/api/diffs` show each watched account's diffs, including cast text, to anyone who can open the page.
+
 ## Config
 
-See `.env.example`. Every value has a default.
+See `.env.example`. Every value has a default. Sizing the net: with the defaults (24-hour lookback, 50 random FIDs) most scans see zero casts, because most of the 3.3 million FIDs are dormant. `LOOKBACK_HOURS=168` and `SAMPLE_SIZE=200` plus a watchlist give every scan something to compare, at the cost of more API calls (`CONCURRENCY` throttles them).
+
+## Deploying
+
+`deploy/` holds a tested kit for a standalone Ubuntu VPS: an idempotent bootstrap (key-only SSH, firewall, Node 24, locked app user, systemd unit, Caddy with automatic TLS) and a desktop-side build-and-rsync deploy script. Runbook in `deploy/README.md`. `scripts/probe-window.mjs` checks what the two nodes return for given FIDs in the scan's own time window; useful when the dashboard shows nothing.
 
 ## Requirements
 
@@ -147,4 +160,6 @@ Node 22.5 or newer (uses the built-in `node:sqlite`, so there are no native modu
 | `src/report.ts` | Daily canonical report and hash |
 | `scripts/check-nodes.ts` | Preflight compatibility check |
 | `scripts/mock-hubs.ts` | Two fake nodes with seeded scenarios |
+| `scripts/probe-window.mjs` | Diagnostic: cast counts per node for given FIDs in the scan window vs 30 days |
+| `deploy/` | VPS bootstrap, systemd unit, Caddyfile, deploy script, runbook |
 | `test/` | Unit tests (`npm test`) |
