@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { CLIENT_STATUSES, type ClientHealth, type ClientStatus } from "./clients.js";
 import type { Config } from "./config.js";
 import type { Store } from "./store/store.js";
 import { CAUSES, type Cause, type DiffRow, type InfoSnapshot, type Side, type StallRow } from "./types.js";
@@ -39,7 +40,7 @@ const CAUSE_HELP: Record<Cause, string> = {
 
 const isCause = (v: string | undefined): v is Cause => v !== undefined && (CAUSES as readonly string[]).includes(v);
 
-export function buildApp(cfg: Config, store: Store): Hono {
+export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth[]): Hono {
   const app = new Hono();
   const label = (s: Side) => (s === "a" ? cfg.a.label : cfg.b.label);
 
@@ -55,6 +56,9 @@ export function buildApp(cfg: Config, store: Store): Hono {
     const rows = await store.listDiffs({ ...(cause !== undefined ? { cause } : {}), limit });
     return c.json(rows.map(({ messageJson, ...r }) => ({ ...r, message: JSON.parse(messageJson) as unknown })));
   });
+
+  // Client health (docs/CLIENT-HEALTH.md): latest status per configured client, or [] when off.
+  app.get("/api/clients", (c) => c.json({ clients: clients?.() ?? [] }));
 
   app.get("/api/stalls", async (c) => {
     const limit = Math.min(Number(c.req.query("limit") ?? 200) || 200, 5000);
@@ -127,6 +131,25 @@ export function buildApp(cfg: Config, store: Store): Hono {
             )
             .join("")}</tbody></table></div>`;
 
+    // Client cards render only from fixed vocabularies: the status word comes
+    // from CLIENT_STATUSES, the link from the operator's config, and every
+    // string passes through esc(). Nothing from a health response is a link.
+    const STATUS_CLASS: Record<ClientStatus, string> = { ok: "ok", degraded: "warn", down: "bad", unknown: "muted" };
+    const clientsHtml = (list: ClientHealth[]) =>
+      list.length === 0
+        ? ""
+        : `<section class="card" style="margin-bottom:12px"><h2>Clients</h2>
+<p class="muted">Apps people use on each network, checked every ${Math.round(cfg.clientHealthIntervalMs / 1000)} s against the status endpoint each one publishes. Links go to the client's own site.</p>
+<div class="scroll"><table><thead><tr><th>Client</th><th>Network</th><th>Status</th><th>Latency</th><th>Checked</th><th>Note</th></tr></thead><tbody>
+${list
+  .map((h) => {
+    const status: ClientStatus = CLIENT_STATUSES.includes(h.status) ? h.status : "unknown";
+    return `<tr><td><a href="${esc(h.siteUrl)}" rel="noopener noreferrer" target="_blank">${esc(h.label)}</a> <span class="muted">${esc(h.siteHost)}</span></td>
+<td>${esc(h.network)}</td><td><span class="pill ${STATUS_CLASS[status]}">${status}</span></td>
+<td>${h.latencyMs === null ? "" : `${h.latencyMs} ms`}</td><td>${ago(h.checkedAt, now)}</td><td>${esc(h.note)}</td></tr>`;
+  })
+  .join("")}</tbody></table></div></section>`;
+
     const stallsHtml = (rows: StallRow[]) =>
       rows.length === 0
         ? `<p class="muted">None recorded.</p>`
@@ -153,7 +176,7 @@ main{max-width:1100px;margin:0 auto;padding:20px 16px}h1{font-size:20px;margin:0
 .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}.stat .n{font-size:28px;font-weight:650}
 .stat .k{text-transform:uppercase;font-size:12px;letter-spacing:.05em;color:var(--muted)}.stat .help{font-size:13px;color:var(--muted);margin-top:4px}
 .stat.unexplained .n{color:var(--bad)}.stat.pending .n{color:var(--warn)}
-.pill{font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid currentColor}.ok{color:var(--ok)}.bad,.bad-text{color:var(--bad)}
+.pill{font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid currentColor}.ok{color:var(--ok)}.bad,.bad-text{color:var(--bad)}.warn{color:var(--warn)}
 table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 th{font-weight:600;color:var(--muted)}.mono{font-family:ui-monospace,monospace}.scroll{overflow:auto;max-height:420px}
 td.text{white-space:normal;min-width:240px;max-width:460px}
@@ -162,6 +185,7 @@ td.text{white-space:normal;min-width:240px;max-width:460px}
 <p class="muted">Scans run every ${Math.round(cfg.scanIntervalMs / 60000)} min: ${summary.scans} so far, last ${ago(summary.lastScanAt, now)}, next in about ${nextScanIn(summary.lastScanAt, cfg.scanIntervalMs, now)}. This page reloads every 30 s. Read-only.</p>
 <div class="stats">${counts}</div>
 <div class="grid">${nodeCard("a", ia)}${nodeCard("b", ib)}</div>
+${clientsHtml(clients?.() ?? [])}
 <section class="card" style="margin-bottom:12px"><h2>Shard stalls${summary.openStalls > 0 ? ` <span class="pill bad">${summary.openStalls} ongoing</span>` : ""}</h2>
 <p class="muted">A shard on one node stopped advancing while the same shard on the other node kept going. Diffs on a stalled shard stay pending until it recovers.</p>${stallsHtml(stalls)}</section>
 <section class="card"><h2>Unexplained</h2><p class="muted">Missing on ${esc(cfg.a.label)}: ${summary.byMissingSide.a} · missing on ${esc(cfg.b.label)}: ${summary.byMissingSide.b}. Rows are rechecked for ${Math.round(cfg.recheckWindowMs / 3600000)} h; one that turns up on the missing side moves to sync lag and leaves this list.</p>${rowsHtml(unexplained, summary.byCause.unexplained)}</section>
