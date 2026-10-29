@@ -1,0 +1,22 @@
+[
+  {
+    "label": "Quorum",
+    "network": "hypersnap",
+    "siteUrl": "https://www.quorummessenger.com",
+    "healthUrl": "https://REPLACE-WITH-THEIR-HEALTH-ENDPOINT/health",
+    "statusPath": "status",
+    "okValues": ["ok", "healthy", "operational"]
+  },
+  {
+    "label": "Quilcast",
+    "network": "hypersnap",
+    "siteUrl": "https://REPLACE-WITH-THEIR-SITE",
+    "healthUrl": "https://REPLACE-WITH-THEIR-HEALTH-ENDPOINT/healthz",
+    "statusPath": null
+  },
+  {
+    "label": "Vibeshift",
+    "network": "both",
+    "siteUrl": "https://REPLACE-WITH-THEIR-SITE"
+  }
+]
