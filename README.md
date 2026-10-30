@@ -138,6 +138,10 @@ On a deployed server keep the real list outside the deployed tree (for example i
 
 See `.env.example`. Every value has a default. Sizing the net: with the defaults (24-hour lookback, 50 random FIDs) most scans see zero casts, because most of the 3.3 million FIDs are dormant. `LOOKBACK_HOURS=168` and `SAMPLE_SIZE=200` plus a watchlist give every scan something to compare, at the cost of more API calls (`CONCURRENCY` throttles them).
 
+## Client health (optional)
+
+Shows whether the apps people use on each network (Vibeshift, Quilcast, Quorum, and others) report themselves healthy, with a link to each one's site. Off unless `CLIENT_HEALTH_FILE` names a config; every URL is yours, nothing from a response ever becomes a link or text on the page. Details, config format, and the safety contract: `docs/CLIENT-HEALTH.md`.
+
 ## Deploying
 
 `deploy/` holds a tested kit for a standalone Ubuntu VPS: an idempotent bootstrap (key-only SSH, firewall, Node 24, locked app user, systemd unit, Caddy with automatic TLS) and a desktop-side build-and-rsync deploy script. Runbook in `deploy/README.md`. `scripts/probe-window.mjs` checks what the two nodes return for given FIDs in the scan's own time window; useful when the dashboard shows nothing.
@@ -157,6 +161,7 @@ Node 22.5 or newer (uses the built-in `node:sqlite`, so there are no native modu
 | `src/loops.ts` | info (plus stall tracking), scan, recheck loops |
 | `src/store/sqlite.ts` | SQLite schema and store |
 | `src/server.ts` | Hono dashboard and JSON API |
+| `src/clients.ts` | Optional client status checks (`docs/CLIENT-HEALTH.md`) |
 | `src/report.ts` | Daily canonical report and hash |
 | `scripts/check-nodes.ts` | Preflight compatibility check |
 | `scripts/mock-hubs.ts` | Two fake nodes with seeded scenarios |

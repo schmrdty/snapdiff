@@ -17,6 +17,10 @@ snapdiff.schmidtiest.xyz {
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		X-Frame-Options DENY
+		# The page has no scripts and no external assets. Inline <style> is the
+		# only thing allowed beyond same-origin, so even a rendering mistake
+		# cannot load or run anything from a third party.
+		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 		-Server
 	}
 
