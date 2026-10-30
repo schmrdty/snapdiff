@@ -1,4 +1,5 @@
 import { serve } from "@hono/node-server";
+import { ClientHealthMonitor, loadClients } from "./clients.js";
 import { loadConfig } from "./config.js";
 import { HubClient } from "./hub.js";
 import { every, pollInfo, recheckOnce, scanOnce, type Deps } from "./loops.js";
@@ -34,7 +35,17 @@ const stops = [
   every(cfg.recheckIntervalMs, "recheck", () => recheckOnce(deps), log),
 ];
 
-const server = serve({ fetch: buildApp(cfg, store).fetch, port: cfg.port, hostname: "0.0.0.0" });
+// Client health is off unless CLIENT_HEALTH_FILE names a config (docs/CLIENT-HEALTH.md).
+// A bad config file is a startup error on purpose: a silently empty card would hide a typo.
+const clientSpecs = cfg.clientHealthFile === "" ? [] : loadClients(cfg.clientHealthFile);
+const monitor = clientSpecs.length > 0 ? new ClientHealthMonitor(clientSpecs, fetch, log) : null;
+if (monitor) {
+  log(`clients: ${clientSpecs.length} configured, checked every ${Math.round(cfg.clientHealthIntervalMs / 1000)}s`);
+  await monitor.runAll().catch((e: unknown) => log(`[clients] ${String(e)}`));
+  stops.push(every(cfg.clientHealthIntervalMs, "clients", () => monitor.runAll(), log));
+}
+
+const server = serve({ fetch: buildApp(cfg, store, monitor ? () => monitor.snapshot() : undefined).fetch, port: cfg.port, hostname: "0.0.0.0" });
 log(`dashboard: http://localhost:${cfg.port}`);
 
 const shutdown = async () => {

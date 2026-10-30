@@ -62,6 +62,9 @@ export interface Config {
   concurrency: number;
   maxPagesPerFid: number;
   requestTimeoutMs: number;
+  /** Path to the clients JSON (docs/CLIENT-HEALTH.md). Empty = feature off. */
+  clientHealthFile: string;
+  clientHealthIntervalMs: number;
 }
 
 const num = (name: string, fallback: number): number => {
@@ -134,6 +137,8 @@ export function loadConfig(): Config {
     concurrency: num("CONCURRENCY", 4),
     maxPagesPerFid: num("MAX_PAGES_PER_FID", 20),
     requestTimeoutMs: num("REQUEST_TIMEOUT_MS", 10_000),
+    clientHealthFile: str("CLIENT_HEALTH_FILE", ""),
+    clientHealthIntervalMs: num("CLIENT_HEALTH_INTERVAL_SEC", 60) * 1000,
   };
 }
 
