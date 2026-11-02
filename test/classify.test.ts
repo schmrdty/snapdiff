@@ -45,7 +45,7 @@ test("canonicalJson is key-order independent", () => {
 
 test("sqlite store: dedupe, recheck window, verdict", async () => {
   const s = new SqliteStore(":memory:");
-  const d = { hash: "0xaa", fid: 1, shard: 2, msgTimestamp: 1, presentOn: "a" as const, missingOn: "b" as const, messageJson: "{}", firstSeen: 1000 };
+  const d = { hash: "0xaa", fid: 1, shard: 2, msgTimestamp: 1, presentOn: "a", missingOn: "b", presentNodes: ["a"], scope: "network" as const, missingNetwork: "hypersnap", messageJson: "{}", firstSeen: 1000 };
   assert.equal(await s.insertDiff(d), true);
   assert.equal(await s.insertDiff(d), false);
   assert.equal((await s.dueForRecheck(1500, 1000, 10_000, 10)).length, 0, "not due yet");

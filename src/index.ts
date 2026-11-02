@@ -11,19 +11,20 @@ const cfg = loadConfig();
 const log = (m: string) => console.log(`${new Date().toISOString()} ${m}`);
 
 // The only line to change when moving to SpacetimeDB (see src/store/spacetime.ts).
-const store: Store = new SqliteStore(cfg.dbPath);
+// The legacy labels tell a two-node database what its 'a'/'b' rows meant (first and second node).
+const store: Store = new SqliteStore(cfg.dbPath, {
+  legacy: { a: cfg.nodes[0]!.label, b: cfg.nodes[1]!.label },
+  networks: Object.fromEntries(cfg.nodes.map((n) => [n.label, n.network])),
+});
 
 const deps: Deps = {
   cfg,
   store,
   log,
-  hubs: {
-    a: new HubClient("a", cfg.a.url, cfg.requestTimeoutMs, cfg.a.headers),
-    b: new HubClient("b", cfg.b.url, cfg.requestTimeoutMs, cfg.b.headers),
-  },
+  hubs: Object.fromEntries(cfg.nodes.map((n) => [n.label, new HubClient(n.label, n.url, cfg.requestTimeoutMs, n.headers)])),
 };
 
-log(`snapdiff: ${cfg.a.label} (${cfg.a.url}) vs ${cfg.b.label} (${cfg.b.url})`);
+log(`snapdiff: reference ${cfg.reference}; nodes ${cfg.nodes.map((n) => `${n.label} [${n.network}] (${n.url})`).join(", ")}`);
 log(`watchlist: ${cfg.watchFids.length} fids, +${cfg.sampleSize} random per scan, lookback ${cfg.lookbackHours}h`);
 
 // Info first so FID sampling has an upper bound before the first scan.

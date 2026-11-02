@@ -1,4 +1,4 @@
-import type { Cause, HubMessage, NewDiff, Side } from "./types.js";
+import type { Cause, HubMessage, NewDiff, Scope, Side } from "./types.js";
 
 export interface RuleConfig {
   v21TextBytes: number;
@@ -81,15 +81,40 @@ export function classify(i: RecheckInput): Verdict {
   return { cause: "unexplained", note: "valid under both rule sets, still missing", final: false };
 }
 
-export function toNewDiff(msg: HubMessage, presentOn: Side, now: number, shard: number | null): NewDiff {
+export interface Placement {
+  /** Answering nodes that had the cast, in config order. */
+  presentNodes: Side[];
+  missingOn: Side;
+  scope: Scope;
+  missingNetwork: string;
+  /** presentOn is the reference when it had the cast, else the first of presentNodes. */
+  reference: Side;
+}
+
+export function toNewDiff(msg: HubMessage, p: Placement, now: number, shard: number | null): NewDiff {
+  const presentOn = p.presentNodes.includes(p.reference) ? p.reference : p.presentNodes[0];
+  if (presentOn === undefined) throw new Error("a diff needs at least one node that has the cast");
+  if (p.presentNodes.includes(p.missingOn)) throw new Error(`"${p.missingOn}" cannot both have and lack a cast`);
   return {
     hash: msg.hash.toLowerCase(),
     fid: msg.data.fid,
     shard,
     msgTimestamp: msg.data.timestamp + 1_609_459_200,
     presentOn,
-    missingOn: presentOn === "a" ? "b" : "a",
+    missingOn: p.missingOn,
+    presentNodes: [...p.presentNodes],
+    scope: p.scope,
+    missingNetwork: p.missingNetwork,
     messageJson: JSON.stringify(msg),
     firstSeen: now,
   };
+}
+
+/**
+ * Scope of one missing (hash, node), from the presence picture of the nodes that answered:
+ * "node" when a peer on the same network has the cast, else "network".
+ */
+export function scopeOf(missingOn: Side, presentNodes: ReadonlyArray<Side>, networkOf: (l: Side) => string): Scope {
+  const net = networkOf(missingOn);
+  return presentNodes.some((l) => l !== missingOn && networkOf(l) === net) ? "node" : "network";
 }

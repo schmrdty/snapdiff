@@ -22,10 +22,9 @@ const check = async (name: string, fn: () => Promise<string>) => {
   }
 };
 
-for (const side of ["a", "b"] as const) {
-  const node = side === "a" ? cfg.a : cfg.b;
-  const hub = new HubClient(side, node.url, cfg.requestTimeoutMs, node.headers);
-  console.log(`\n${node.label} (${node.url})`);
+for (const node of cfg.nodes) {
+  const hub = new HubClient(node.label, node.url, cfg.requestTimeoutMs, node.headers);
+  console.log(`\n${node.label} on ${node.network} (${node.url})${node.label === cfg.reference ? "  [reference]" : ""}`);
 
   let numShards: number | null = null;
   await check("/v1/info", async () => {
@@ -75,5 +74,5 @@ for (const side of ["a", "b"] as const) {
   });
 }
 
-console.log(failures === 0 ? "\nBoth nodes look compatible." : `\n${failures} check(s) failed. Fix before running snapdiff.`);
+console.log(failures === 0 ? `\nAll ${cfg.nodes.length} nodes look compatible.` : `\n${failures} check(s) failed. Fix before running snapdiff.`);
 process.exit(failures === 0 ? 0 : 1);
