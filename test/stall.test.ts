@@ -82,8 +82,8 @@ test("stall lifecycle: start, touch, end; recheck pauses only the stalled shard"
   const cfg = {
     ...loadConfig(),
     nodes: [
-      { label: "a", url: "http://a.test", headers: {} },
-      { label: "b", url: "http://b.test", headers: {} },
+      { label: "a", url: "http://a.test", network: "snapchain", headers: {} },
+      { label: "b", url: "http://b.test", network: "hypersnap", headers: {} },
     ],
     reference: "a",
     behindBlockDelay: 50,
@@ -103,8 +103,9 @@ test("stall lifecycle: start, touch, end; recheck pauses only the stalled shard"
   };
 
   // One diff on each shard, both missing on b.
-  await store.insertDiff({ hash: "0x01", fid: 3, shard: 1, msgTimestamp: 1, presentOn: "a", missingOn: "b", messageJson: JSON.stringify({ hash: "0x01", data: { type: "x", fid: 3, timestamp: 1, castAddBody: { text: "hi" } } }), firstSeen: t - 10 });
-  await store.insertDiff({ hash: "0x02", fid: 1, shard: 2, msgTimestamp: 1, presentOn: "a", missingOn: "b", messageJson: JSON.stringify({ hash: "0x02", data: { type: "x", fid: 1, timestamp: 1, castAddBody: { text: "hi" } } }), firstSeen: t - 10 });
+  const place = { presentOn: "a", missingOn: "b", presentNodes: ["a"], scope: "network" as const, missingNetwork: "hypersnap" };
+  await store.insertDiff({ hash: "0x01", fid: 3, shard: 1, msgTimestamp: 1, ...place, messageJson: JSON.stringify({ hash: "0x01", data: { type: "x", fid: 3, timestamp: 1, castAddBody: { text: "hi" } } }), firstSeen: t - 10 });
+  await store.insertDiff({ hash: "0x02", fid: 1, shard: 2, msgTimestamp: 1, ...place, messageJson: JSON.stringify({ hash: "0x02", data: { type: "x", fid: 1, timestamp: 1, castAddBody: { text: "hi" } } }), firstSeen: t - 10 });
 
   // b stalls on shard 2.
   const a1 = info("a", { 0: 3, 1: 4, 2: 5 }, { 2: 5000 });

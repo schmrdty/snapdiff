@@ -69,14 +69,30 @@ export interface InfoSnapshot {
   error: string | null;
 }
 
+/**
+ * How far a difference reaches, judged at first sighting from the nodes that answered:
+ *
+ * node     At least one other node on the missing node's network has the cast. The missing
+ *          node is behind or broken; its network is fine.
+ * network  Every answering node on the missing node's network lacks the cast. The networks
+ *          disagree (or the only node of that network does).
+ */
+export type Scope = "node" | "network";
+
 export interface NewDiff {
   hash: string;
   fid: number;
   /** Data shard that holds this FID, or null when numShards was unknown at insert time. */
   shard: number | null;
   msgTimestamp: number; // unix seconds
+  /** One node that had the cast: the reference when it did, else the first in config order. */
   presentOn: Side;
   missingOn: Side;
+  /** Every answering node that had the cast when this row was written, in config order. */
+  presentNodes: Side[];
+  scope: Scope;
+  /** Network of the missing node, denormalized so the store can group without config. */
+  missingNetwork: string;
   messageJson: string;
   firstSeen: number; // unix ms
 }
@@ -100,8 +116,11 @@ export interface StallRow extends Omit<NewStall, "peer"> {
   maxBlockDelay: number;
 }
 
-export interface DiffRow extends NewDiff {
+export interface DiffRow extends Omit<NewDiff, "scope" | "missingNetwork"> {
   id: number;
+  /** Null on rows written before scope existed; presentNodes is [] on those. */
+  scope: Scope | null;
+  missingNetwork: string | null;
   cause: Cause;
   note: string | null;
   lastChecked: number | null;
@@ -120,6 +139,10 @@ export interface Summary {
   byCause: Record<Cause, number>;
   /** Open unexplained diffs per node they are missing on. */
   byMissingNode: Record<Side, number>;
+  /** Unexplained diffs by scope (rows without a scope are not counted). */
+  byScope: Record<Scope, number>;
+  /** Per network: distinct casts missing on every one of its nodes, by cause. */
+  networkSplit: Record<string, { unexplained: number; pending: number }>;
   scans: number;
   lastScanAt: number | null;
   openStalls: number;

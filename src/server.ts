@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { CLIENT_STATUSES, type ClientHealth, type ClientStatus } from "./clients.js";
-import { comparedNodes, nodeOf, type Config } from "./config.js";
+import { networks, nodeOf, type Config } from "./config.js";
 import type { Store } from "./store/store.js";
 import { CAUSES, type Cause, type DiffRow, type InfoSnapshot, type Side, type StallRow } from "./types.js";
 
@@ -45,12 +45,14 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
   // Node ids in the database ARE the configured labels, so rows render as-is.
   const label = (s: Side) => s;
   const nodeLabels = cfg.nodes.map((n) => n.label);
+  const nets = networks(cfg);
+  const networkMap = Object.fromEntries(nets.map((x) => [x.network, x.labels]));
   const latestInfos = async (): Promise<Record<Side, InfoSnapshot | null>> =>
     Object.fromEntries(await Promise.all(nodeLabels.map(async (l) => [l, await store.latestInfo(l)] as const)));
 
   app.get("/api/summary", async (c) => {
     const [summary, info] = await Promise.all([store.summary(), latestInfos()]);
-    return c.json({ nodes: nodeLabels, reference: cfg.reference, summary, info });
+    return c.json({ nodes: nodeLabels, networks: networkMap, reference: cfg.reference, summary, info });
   });
 
   app.get("/api/diffs", async (c) => {
@@ -126,11 +128,11 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       rows.length === 0
         ? `<p class="muted">None.</p>`
         : `<p class="muted">Newest ${rows.length} of ${total}; older rows stay in the database and at /api/diffs.</p>
-          <div class="scroll"><table><thead><tr><th>First seen</th><th>FID</th><th>Shard</th><th>Hash</th><th>On</th><th>Missing on</th><th>Cast</th><th>Note</th></tr></thead><tbody>
+          <div class="scroll"><table><thead><tr><th>First seen</th><th>FID</th><th>Shard</th><th>Hash</th><th>On</th><th>Missing on</th><th>Scope</th><th>Cast</th><th>Note</th></tr></thead><tbody>
           ${rows
             .map(
               (r) => `<tr><td>${ago(r.firstSeen, now)}</td><td>${r.fid}</td><td>${r.shard ?? "?"}</td><td class="mono">${esc(r.hash.slice(0, 18))}…</td>
-              <td>${esc(label(r.presentOn))}</td><td>${esc(label(r.missingOn))}</td><td class="text">${esc(clip(castText(r.messageJson), 140))}</td><td>${esc(r.note ?? "")}</td></tr>`,
+              <td>${esc(r.presentNodes.length > 0 ? r.presentNodes.join(", ") : label(r.presentOn))}</td><td>${esc(label(r.missingOn))}</td><td>${r.scope === null ? "" : `<span class="pill ${r.scope === "network" ? "bad" : "warn"}">${r.scope}</span>`}</td><td class="text">${esc(clip(castText(r.messageJson), 140))}</td><td>${esc(r.note ?? "")}</td></tr>`,
             )
             .join("")}</tbody></table></div>`;
 
@@ -152,6 +154,32 @@ ${list
 <td>${h.latencyMs === null ? "" : `${h.latencyMs} ms`}</td><td>${ago(h.checkedAt, now)}</td><td>${esc(h.note)}</td></tr>`;
   })
   .join("")}</tbody></table></div></section>`;
+
+    // A shard stalled on every node of one network is that network stalling, not a node.
+    const networkWideStalls = (rows: StallRow[]): string[] => {
+      const openOn = new Map<number, Set<Side>>();
+      for (const s of rows) {
+        if (s.endedAt !== null) continue;
+        const set = openOn.get(s.shardId) ?? new Set<Side>();
+        set.add(s.side);
+        openOn.set(s.shardId, set);
+      }
+      const out: string[] = [];
+      for (const { network, labels } of nets) {
+        for (const [shardId, nodes] of openOn) if (labels.every((l) => nodes.has(l))) out.push(`${network} shard ${shardId}`);
+      }
+      return out;
+    };
+
+    const splitHtml = () => `<section class="card" style="margin-bottom:12px"><h2>Network split</h2>
+<p class="muted">A cast missing on every node of a network is a disagreement between the networks (scope "network"). A cast missing on one node while another node on its network has it is that node's problem (scope "node"). Unexplained by scope: node ${summary.byScope.node}, network ${summary.byScope.network}. Judged when each row is first seen, from the nodes that answered.</p>
+<table><thead><tr><th>Network</th><th>Nodes</th><th>Casts missing on all its nodes: unexplained</th><th>pending</th></tr></thead><tbody>
+${nets
+  .map(
+    ({ network, labels }) =>
+      `<tr><td>${esc(network)}</td><td>${labels.map(esc).join(", ")}</td><td>${(summary.networkSplit[network]?.unexplained ?? 0) > 0 ? `<span class="pill bad">${summary.networkSplit[network]?.unexplained}</span>` : "0"}</td><td>${summary.networkSplit[network]?.pending ?? 0}</td></tr>`,
+  )
+  .join("")}</tbody></table></section>`;
 
     const stallsHtml = (rows: StallRow[]) =>
       rows.length === 0
@@ -184,13 +212,14 @@ table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;p
 th{font-weight:600;color:var(--muted)}.mono{font-family:ui-monospace,monospace}.scroll{overflow:auto;max-height:420px}
 td.text{white-space:normal;min-width:240px;max-width:460px}
 </style></head><body><main>
-<h1>snapdiff: ${esc(cfg.reference)} vs ${comparedNodes(cfg).map((n) => esc(n.label)).join(", ")}</h1>
+<h1>snapdiff: ${nets.map(({ network, labels }) => `${esc(network)} (${labels.length} node${labels.length === 1 ? "" : "s"})`).join(" vs ")}</h1>
 <p class="muted">Scans run every ${Math.round(cfg.scanIntervalMs / 60000)} min: ${summary.scans} so far, last ${ago(summary.lastScanAt, now)}, next in about ${nextScanIn(summary.lastScanAt, cfg.scanIntervalMs, now)}. This page reloads every 30 s. Read-only.</p>
 <div class="stats">${counts}</div>
 <div class="grid">${nodeLabels.map((l) => nodeCard(l, infos[l] ?? null)).join("")}</div>
+${splitHtml()}
 ${clientsHtml(clients?.() ?? [])}
-<section class="card" style="margin-bottom:12px"><h2>Shard stalls${summary.openStalls > 0 ? ` <span class="pill bad">${summary.openStalls} ongoing</span>` : ""}</h2>
-<p class="muted">A shard on one node stopped advancing while the same shard on the other node kept going. Diffs on a stalled shard stay pending until it recovers.</p>${stallsHtml(stalls)}</section>
+<section class="card" style="margin-bottom:12px"><h2>Shard stalls${summary.openStalls > 0 ? ` <span class="pill bad">${summary.openStalls} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}</h2>
+<p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer kept going. When every node of a network is stalled on a shard it is marked network-wide. Diffs on a stalled shard stay pending until it recovers.</p>${stallsHtml(stalls)}</section>
 <section class="card"><h2>Unexplained</h2><p class="muted">${nodeLabels.map((l) => `Missing on ${esc(l)}: ${summary.byMissingNode[l] ?? 0}`).join(" · ")}. Rows are rechecked for ${Math.round(cfg.recheckWindowMs / 3600000)} h; one that turns up on the missing side moves to sync lag and leaves this list.</p>${rowsHtml(unexplained, summary.byCause.unexplained)}</section>
 <section class="card" style="margin-top:12px"><h2>Pending</h2><p class="muted">Seen on one side, not yet old enough or not yet rechecked. Most resolve on their own.</p>${rowsHtml(pending, summary.byCause.pending)}</section>
 </main></body></html>`);

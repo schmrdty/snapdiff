@@ -3,6 +3,8 @@ import { readFileSync, existsSync } from "node:fs";
 export interface NodeConfig {
   label: string;
   url: string;
+  /** Which protocol network the node follows ("snapchain", "hypersnap"). Diff scope is judged per network. */
+  network: string;
   /** Extra request headers, for hosted nodes that need a key (Neynar: x-api-key). */
   headers: Record<string, string>;
 }
@@ -94,10 +96,19 @@ const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,23}$/;
 /** "ohsnap" -> NODE_OHSNAP_URL; "open-caster" -> NODE_OPEN_CASTER_URL. */
 export const envKeyFor = (label: string): string => label.toUpperCase().replace(/[^A-Z0-9]/g, "_");
 
+/** A label that names its network needs no NODE_<LABEL>_NETWORK. */
+export const inferNetwork = (label: string): string | undefined => {
+  const l = label.toLowerCase();
+  if (l.includes("snapchain")) return "snapchain";
+  if (l.includes("hypersnap")) return "hypersnap";
+  return undefined;
+};
+
 /**
- * Nodes come from NODES="label,label,..." with NODE_<LABEL>_URL / NODE_<LABEL>_HEADERS per
- * label, or, when NODES is unset, from the original two-node NODE_A_* / NODE_B_* variables.
- * REFERENCE_NODE picks the node the others are compared against (default: the first).
+ * Nodes come from NODES="label,label,..." with NODE_<LABEL>_URL / NODE_<LABEL>_NETWORK /
+ * NODE_<LABEL>_HEADERS per label, or, when NODES is unset, from the original two-node
+ * NODE_A_* / NODE_B_* variables (networks default to snapchain for A and hypersnap for B).
+ * REFERENCE_NODE picks the node that anchors the dashboard and presentOn (default: the first).
  */
 export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeConfig[]; reference: string } {
   const read = (name: string, fallback: string): string => {
@@ -121,22 +132,26 @@ export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeCo
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s !== "");
+  const legacy = (slot: "A" | "B", label: string, url: string, network: string): NodeConfig => {
+    const l = read(`NODE_${slot}_LABEL`, label);
+    return { label: l, url: read(`NODE_${slot}_URL`, url).replace(/\/$/, ""), network: read(`NODE_${slot}_NETWORK`, inferNetwork(l) ?? network), headers: headers(`NODE_${slot}_HEADERS`) };
+  };
   const nodes: NodeConfig[] =
     listed.length === 0
-      ? [
-          { label: read("NODE_A_LABEL", "snapchain"), url: read("NODE_A_URL", "http://127.0.0.1:3381").replace(/\/$/, ""), headers: headers("NODE_A_HEADERS") },
-          { label: read("NODE_B_LABEL", "hypersnap"), url: read("NODE_B_URL", "http://127.0.0.1:4381").replace(/\/$/, ""), headers: headers("NODE_B_HEADERS") },
-        ]
+      ? [legacy("A", "snapchain", "http://127.0.0.1:3381", "snapchain"), legacy("B", "hypersnap", "http://127.0.0.1:4381", "hypersnap")]
       : listed.map((label) => {
           const k = envKeyFor(label);
           const url = read(`NODE_${k}_URL`, "");
           if (url === "") throw new Error(`NODES lists "${label}" but NODE_${k}_URL is not set`);
-          return { label, url: url.replace(/\/$/, ""), headers: headers(`NODE_${k}_HEADERS`) };
+          const network = read(`NODE_${k}_NETWORK`, inferNetwork(label) ?? "");
+          if (network === "") throw new Error(`NODE_${k}_NETWORK is not set and "${label}" does not name its network (snapchain or hypersnap)`);
+          return { label, url: url.replace(/\/$/, ""), network, headers: headers(`NODE_${k}_HEADERS`) };
         });
   if (nodes.length < 2) throw new Error("at least two nodes are required");
   const seen = new Set<string>();
   for (const n of nodes) {
     if (!LABEL_RE.test(n.label)) throw new Error(`node label "${n.label}" must be 1 to 24 letters, digits, or dashes`);
+    if (!LABEL_RE.test(n.network)) throw new Error(`network "${n.network}" for node "${n.label}" must be 1 to 24 letters, digits, or dashes`);
     if (seen.has(n.label)) throw new Error(`duplicate node label "${n.label}"`);
     seen.add(n.label);
   }
@@ -196,3 +211,14 @@ export function loadConfig(): Config {
 
 /** Every node except the reference, in config order. */
 export const comparedNodes = (cfg: Pick<Config, "nodes" | "reference">): NodeConfig[] => cfg.nodes.filter((n) => n.label !== cfg.reference);
+
+/** Networks in first-seen config order, each with the labels of its nodes. */
+export function networks(cfg: Pick<Config, "nodes">): Array<{ network: string; labels: string[] }> {
+  const out: Array<{ network: string; labels: string[] }> = [];
+  for (const n of cfg.nodes) {
+    const e = out.find((x) => x.network === n.network);
+    if (e === undefined) out.push({ network: n.network, labels: [n.label] });
+    else e.labels.push(n.label);
+  }
+  return out;
+}

@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { keccak256, toHex } from "viem";
-import { loadConfig } from "./config.js";
+import { loadConfig, networks } from "./config.js";
 import { SqliteStore } from "./store/sqlite.js";
 import type { Store } from "./store/store.js";
 import { CAUSES, type Cause } from "./types.js";
@@ -17,7 +17,7 @@ export function canonicalJson(v: unknown): string {
     .join(",")}}`;
 }
 
-export async function buildReport(store: Store, nodes: { reference: string; labels: string[] }, dayUtc: string) {
+export async function buildReport(store: Store, nodes: { reference: string; labels: string[]; networks: Record<string, string[]> }, dayUtc: string) {
   const from = Date.parse(`${dayUtc}T00:00:00Z`);
   if (Number.isNaN(from)) throw new Error(`Bad date "${dayUtc}", expected YYYY-MM-DD`);
   const to = from + 86_400_000;
@@ -47,7 +47,7 @@ export async function buildReport(store: Store, nodes: { reference: string; labe
       .sort((x, y) => x.startedAt - y.startedAt),
     unexplained: rows
       .filter((r) => r.cause === "unexplained")
-      .map((r) => ({ hash: r.hash, fid: r.fid, shard: r.shard, msgTimestamp: r.msgTimestamp, presentOn: r.presentOn, missingOn: r.missingOn, firstSeen: r.firstSeen }))
+      .map((r) => ({ hash: r.hash, fid: r.fid, shard: r.shard, msgTimestamp: r.msgTimestamp, presentOn: r.presentOn, presentNodes: r.presentNodes, missingOn: r.missingOn, scope: r.scope, firstSeen: r.firstSeen }))
       .sort((x, y) => (x.hash < y.hash ? -1 : x.hash > y.hash ? 1 : 0)),
   };
   const json = canonicalJson(report);
@@ -58,7 +58,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const cfg = loadConfig();
   const day = process.argv[2] ?? new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
   const store = new SqliteStore(cfg.dbPath);
-  const { json, hash, report } = await buildReport(store, { reference: cfg.reference, labels: cfg.nodes.map((n) => n.label) }, day);
+  const { json, hash, report } = await buildReport(
+    store,
+    { reference: cfg.reference, labels: cfg.nodes.map((n) => n.label), networks: Object.fromEntries(networks(cfg).map((x) => [x.network, x.labels])) },
+    day,
+  );
   await store.close();
   mkdirSync("reports", { recursive: true });
   const path = `reports/${day}.json`;
