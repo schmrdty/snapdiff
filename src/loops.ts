@@ -1,9 +1,8 @@
 import type { Config } from "./config.js";
-import { comparedNodes } from "./config.js";
 import type { HubClient } from "./hub.js";
 import type { Store } from "./store/store.js";
 import type { HubMessage, InfoSnapshot, ScanRun, Side } from "./types.js";
-import { classify, diffByHash, toNewDiff } from "./classify.js";
+import { classify, scopeOf, toNewDiff } from "./classify.js";
 import { shardForFid } from "./shard.js";
 import { detectStalls, shardBehind } from "./stall.js";
 
@@ -112,10 +111,12 @@ export async function pickFids(d: Deps): Promise<number[]> {
 }
 
 /*
- * Loop 2: scan sampled FIDs on every node and record hash-level differences, each compared
- * node against the reference. A node whose fetch fails is skipped for that FID (its error is
- * counted) without disturbing the other pairs; a failed REFERENCE fetch skips the FID entirely.
- * A one-sided fetch failure must never look like a missing message.
+ * Loop 2: scan sampled FIDs on every node and record hash-level differences. For each FID the
+ * casts of every node that answered are merged into one presence picture (hash -> nodes that
+ * have it); every answering node that lacks a hash gets one diff row, scoped by whether a
+ * peer on its own network has the cast. A node whose fetch fails is unknown for that FID: it
+ * gets no rows, is not counted as a peer, and its error is counted. Fewer than two answers
+ * skips the FID. A fetch failure must never look like a missing message.
  */
 export async function scanOnce(d: Deps): Promise<ScanRun> {
   const startedAt = clock(d);
@@ -124,7 +125,7 @@ export async function scanOnce(d: Deps): Promise<ScanRun> {
   const stop = nowSec - d.cfg.graceSeconds;
   const fids = await pickFids(d);
   const ref = d.cfg.reference;
-  const others = comparedNodes(d.cfg).map((n) => n.label);
+  const networkOf = (l: Side): string => d.cfg.nodes.find((n) => n.label === l)?.network ?? "unknown";
   const run: ScanRun = {
     startedAt,
     finishedAt: 0,
@@ -154,19 +155,28 @@ export async function scanOnce(d: Deps): Promise<ScanRun> {
         }
       }),
     );
-    const got = new Map(results);
-    const refMsgs = got.get(ref) ?? null;
-    if (refMsgs === null) return;
+    const answered = results.filter((r): r is [Side, HubMessage[]] => r[1] !== null);
+    if (answered.length < 2) return;
     run.fidsScanned++;
     const now = clock(d);
     const shard = shardOf(fid);
-    for (const [l, msgs] of got) if (msgs !== null) run.messagesByNode[l] = (run.messagesByNode[l] ?? 0) + msgs.length;
-    for (const other of others) {
-      const msgs = got.get(other) ?? null;
-      if (msgs === null) continue;
-      const { onlyA, onlyB } = diffByHash(refMsgs, msgs);
-      for (const m of onlyA) if (await d.store.insertDiff(toNewDiff(m, ref, other, now, shard))) run.newDiffs++;
-      for (const m of onlyB) if (await d.store.insertDiff(toNewDiff(m, other, ref, now, shard))) run.newDiffs++;
+    // Presence picture: lowercase hash -> one message plus the answering nodes that have it.
+    const picture = new Map<string, { msg: HubMessage; on: Side[] }>();
+    for (const [l, msgs] of answered) {
+      run.messagesByNode[l] = (run.messagesByNode[l] ?? 0) + msgs.length;
+      for (const m of msgs) {
+        const h = m.hash.toLowerCase();
+        const e = picture.get(h);
+        if (e === undefined) picture.set(h, { msg: m, on: [l] });
+        else if (!e.on.includes(l)) e.on.push(l);
+      }
+    }
+    for (const { msg, on } of picture.values()) {
+      for (const [l] of answered) {
+        if (on.includes(l)) continue;
+        const placement = { presentNodes: on, missingOn: l, scope: scopeOf(l, on, networkOf), missingNetwork: networkOf(l), reference: ref };
+        if (await d.store.insertDiff(toNewDiff(msg, placement, now, shard))) run.newDiffs++;
+      }
     }
   });
 
@@ -226,7 +236,7 @@ export async function recheckOnce(d: Deps): Promise<number> {
     });
     await d.store.updateVerdict(row.id, v.cause, v.note, now, v.final);
     if (v.cause === "unexplained" && row.cause !== "unexplained") {
-      d.log(`[recheck] UNEXPLAINED fid=${row.fid} hash=${row.hash} present on ${row.presentOn}, missing on ${row.missingOn}`);
+      d.log(`[recheck] UNEXPLAINED fid=${row.fid} hash=${row.hash} present on ${row.presentNodes.length > 0 ? row.presentNodes.join(",") : row.presentOn}, missing on ${row.missingOn} (scope ${row.scope ?? "unknown"})`);
     }
   }
   return due.length;

@@ -1,6 +1,6 @@
 # snapdiff
 
-Read-only comparator for Farcaster-protocol nodes (Snapchain and Hypersnap). It asks every configured node for the same casts, diffs each node against one reference node by message hash, and tags every difference with a cause. Only one cause, `unexplained`, is worth investigating. Two nodes is the minimum; any number works (`docs/MULTI-NODE.md`).
+Read-only comparator for Farcaster-protocol nodes (Snapchain and Hypersnap). It asks every configured node for the same casts, records which nodes have each one, and tags every difference with a cause and a scope: `node` when the node's own network peers have the cast (that node's problem), `network` when every node of that network lacks it (the networks disagree). Only one cause, `unexplained`, is worth investigating. Two nodes is the minimum; any number works (`docs/MULTI-NODE.md`).
 
 It never writes to any network. It only reads.
 
@@ -41,14 +41,14 @@ Expected today, before the fork: zero diffs and zero stalls, because both nodes 
 
 Run each node on its own machine (both default to ports 3381-3383, and a Snapchain node needs about 2 TB of disk), then point `NODE_A_URL` and `NODE_B_URL` at them. Everything else is the same as above.
 
-To compare three or more nodes, list them in `NODES` and give each its own `NODE_<LABEL>_URL` (and `NODE_<LABEL>_HEADERS` when a key is needed). Every node is diffed against `REFERENCE_NODE` (default: the first in the list), and the labels become the node ids in the database, the dashboard, and the API. Example and migration notes in `docs/MULTI-NODE.md`.
+To compare three or more nodes, list them in `NODES` and give each its own `NODE_<LABEL>_URL`, `NODE_<LABEL>_NETWORK` (`snapchain` or `hypersnap`), and `NODE_<LABEL>_HEADERS` when a key is needed. The labels become the node ids in the database, the dashboard, and the API; the network tag is what lets snapdiff tell "one Hypersnap node is behind" from "Hypersnap and Snapchain disagree". Example and migration notes in `docs/MULTI-NODE.md`.
 
 ## How it works
 
 | Loop | Default interval | What it does |
 |---|---|---|
 | info | 60 s | Polls `/v1/info` on every node. Stores shard heights and worst `blockDelay`; a shard stall is a node far behind its healthiest peer on that shard. |
-| scan | 15 min | For watchlist FIDs plus `SAMPLE_SIZE` random FIDs, fetches casts from the last `LOOKBACK_HOURS` on every node. Records every hash present on the reference node but not on another node, and the reverse, as one row per (hash, missing node). |
+| scan | 15 min | For watchlist FIDs plus `SAMPLE_SIZE` random FIDs, fetches casts from the last `LOOKBACK_HOURS` on every node and merges them into one presence picture per FID. Records one row per (hash, node that lacks it), with the nodes that had it and a scope (`node` or `network`). |
 | recheck | 60 s | For open diffs older than `RECHECK_AFTER_MIN`, asks the missing node for that exact hash via `/v1/castById`, then classifies. |
 
 ## Causes
@@ -114,8 +114,8 @@ A one-sided fetch failure never creates a diff. The FID is skipped for that scan
 | Route | Returns |
 |---|---|
 | `GET /` | Dashboard (auto-refresh 30 s) |
-| `GET /api/summary` | `nodes` (labels, in order), `reference`, counts by cause and by missing node (`summary.byMissingNode`), latest `/v1/info` per node (`info[label]`) |
-| `GET /api/diffs?cause=unexplained&limit=200` | Diff rows with the full message JSON and shard |
+| `GET /api/summary` | `nodes` (labels, in order), `networks` (network to labels), `reference`, counts by cause, by missing node (`summary.byMissingNode`), by scope (`summary.byScope`), per-network disagreements (`summary.networkSplit`), latest `/v1/info` per node (`info[label]`) |
+| `GET /api/diffs?cause=unexplained&limit=200` | Diff rows with the full message JSON, shard, `presentNodes`, and `scope` |
 | `GET /api/stalls?limit=200` | Shard stall events, newest first |
 
 ## Moving to SpacetimeDB later

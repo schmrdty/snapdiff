@@ -24,7 +24,7 @@ const check = async (name: string, fn: () => Promise<string>) => {
 
 for (const node of cfg.nodes) {
   const hub = new HubClient(node.label, node.url, cfg.requestTimeoutMs, node.headers);
-  console.log(`\n${node.label} (${node.url})${node.label === cfg.reference ? "  [reference]" : ""}`);
+  console.log(`\n${node.label} on ${node.network} (${node.url})${node.label === cfg.reference ? "  [reference]" : ""}`);
 
   let numShards: number | null = null;
   await check("/v1/info", async () => {

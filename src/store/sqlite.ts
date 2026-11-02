@@ -11,6 +11,7 @@ import {
   type NewDiff,
   type NewStall,
   type ScanRun,
+  type Scope,
   type Side,
   type StallRow,
   type Summary,
@@ -41,6 +42,9 @@ CREATE TABLE IF NOT EXISTS diffs (
   msg_timestamp INTEGER NOT NULL,
   present_on    TEXT    NOT NULL,
   missing_on    TEXT    NOT NULL,
+  present_json  TEXT,
+  scope         TEXT,
+  missing_network TEXT,
   cause         TEXT    NOT NULL DEFAULT 'pending'
                 CHECK (cause IN ('pending','sync_lag','relay_filtered','version_rule','unexplained')),
   note          TEXT,
@@ -88,6 +92,11 @@ const MIGRATIONS: Array<{ table: string; column: string; ddl: string }> = [
   // Multi-node (v0.2): which peer a stall was measured against, and per-node cast counts.
   { table: "stalls", column: "peer", ddl: "ALTER TABLE stalls ADD COLUMN peer TEXT" },
   { table: "scans", column: "messages_json", ddl: "ALTER TABLE scans ADD COLUMN messages_json TEXT" },
+  // Network scope: which nodes had the cast, how far the difference reaches, and the missing
+  // node's network. NULL on rows written before this existed.
+  { table: "diffs", column: "present_json", ddl: "ALTER TABLE diffs ADD COLUMN present_json TEXT" },
+  { table: "diffs", column: "scope", ddl: "ALTER TABLE diffs ADD COLUMN scope TEXT" },
+  { table: "diffs", column: "missing_network", ddl: "ALTER TABLE diffs ADD COLUMN missing_network TEXT" },
 ];
 
 /** Tables whose pre-multi-node CHECK pinned side values to 'a'/'b'. */
@@ -97,6 +106,12 @@ const SIDE_TABLES = ["info_snapshots", "diffs", "stalls"] as const;
 export interface LegacyLabels {
   a: string;
   b: string;
+}
+
+export interface OpenOptions {
+  legacy?: LegacyLabels;
+  /** label -> network, used to fill missing_network on rows written before scope existed. */
+  networks?: Record<Side, string>;
 }
 
 type Row = Record<string, unknown>;
@@ -112,6 +127,9 @@ const toDiff = (r: Row): DiffRow => ({
   msgTimestamp: n(r.msg_timestamp),
   presentOn: r.present_on as Side,
   missingOn: r.missing_on as Side,
+  presentNodes: r.present_json === null || r.present_json === undefined ? [] : (JSON.parse(String(r.present_json)) as Side[]),
+  scope: r.scope === "node" || r.scope === "network" ? r.scope : null,
+  missingNetwork: s(r.missing_network),
   cause: r.cause as Cause,
   note: s(r.note),
   messageJson: String(r.message_json),
@@ -150,9 +168,10 @@ export class SqliteStore implements Store {
 
   /**
    * `legacy` names what a pre-multi-node database's 'a' and 'b' rows mean (the first and
-   * second configured node). Pass it from the entrypoint; tests on fresh databases omit it.
+   * second configured node); `networks` fills missing_network on rows older than scope.
+   * Pass both from the entrypoint; tests on fresh databases omit them.
    */
-  constructor(path: string, legacy?: LegacyLabels) {
+  constructor(path: string, opts: OpenOptions = {}) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec(SCHEMA);
@@ -162,7 +181,11 @@ export class SqliteStore implements Store {
     }
     this.migrateCauseCheck();
     this.migrateSideCheck();
-    if (legacy !== undefined) this.relabelLegacySides(legacy);
+    if (opts.legacy !== undefined) this.relabelLegacySides(opts.legacy);
+    if (opts.networks !== undefined) {
+      const fill = this.db.prepare(`UPDATE diffs SET missing_network = ? WHERE missing_on = ? AND missing_network IS NULL`);
+      for (const [label, network] of Object.entries(opts.networks)) fill.run(network, label);
+    }
   }
 
   private tableSql(name: string): string {
@@ -246,10 +269,10 @@ export class SqliteStore implements Store {
   async insertDiff(d: NewDiff): Promise<boolean> {
     const res = this.db
       .prepare(
-        `INSERT OR IGNORE INTO diffs (hash, fid, shard, msg_timestamp, present_on, missing_on, message_json, first_seen)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO diffs (hash, fid, shard, msg_timestamp, present_on, missing_on, present_json, scope, missing_network, message_json, first_seen)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(d.hash, d.fid, d.shard, d.msgTimestamp, d.presentOn, d.missingOn, d.messageJson, d.firstSeen);
+      .run(d.hash, d.fid, d.shard, d.msgTimestamp, d.presentOn, d.missingOn, JSON.stringify(d.presentNodes), d.scope, d.missingNetwork, d.messageJson, d.firstSeen);
     return Number(res.changes) > 0;
   }
 
@@ -372,6 +395,26 @@ export class SqliteStore implements Store {
       .all() as Row[]) {
       byMissingNode[String(r.missing_on)] = n(r.c);
     }
+    const byScope: Record<Scope, number> = { node: 0, network: 0 };
+    for (const r of this.db
+      .prepare(`SELECT scope, COUNT(*) AS c FROM diffs WHERE cause = 'unexplained' AND scope IN ('node','network') GROUP BY scope`)
+      .all() as Row[]) {
+      byScope[r.scope as Scope] = n(r.c);
+    }
+    // One cast missing on three nodes of a network is three rows but one disagreement.
+    const networkSplit: Summary["networkSplit"] = {};
+    for (const r of this.db
+      .prepare(
+        `SELECT missing_network, cause, COUNT(DISTINCT hash) AS c FROM diffs
+         WHERE scope = 'network' AND missing_network IS NOT NULL AND cause IN ('unexplained','pending')
+         GROUP BY missing_network, cause`,
+      )
+      .all() as Row[]) {
+      const net = String(r.missing_network);
+      const e = (networkSplit[net] ??= { unexplained: 0, pending: 0 });
+      if (r.cause === "unexplained") e.unexplained = n(r.c);
+      else e.pending = n(r.c);
+    }
     const scan = this.db.prepare(`SELECT COUNT(*) AS c, MAX(finished_at) AS last FROM scans`).get() as Row;
     const st = this.db
       .prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN ended_at IS NULL THEN 1 ELSE 0 END) AS open FROM stalls`)
@@ -379,6 +422,8 @@ export class SqliteStore implements Store {
     return {
       byCause,
       byMissingNode,
+      byScope,
+      networkSplit,
       scans: n(scan.c),
       lastScanAt: nn(scan.last),
       openStalls: n(st.open ?? 0),
