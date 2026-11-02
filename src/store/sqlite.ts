@@ -22,7 +22,7 @@ PRAGMA busy_timeout = 5000;
 
 CREATE TABLE IF NOT EXISTS info_snapshots (
   id                    INTEGER PRIMARY KEY,
-  side                  TEXT    NOT NULL CHECK (side IN ('a','b')),
+  side                  TEXT    NOT NULL,
   at                    INTEGER NOT NULL,
   reachable             INTEGER NOT NULL,
   max_block_delay       INTEGER,
@@ -39,8 +39,8 @@ CREATE TABLE IF NOT EXISTS diffs (
   fid           INTEGER NOT NULL,
   shard         INTEGER,
   msg_timestamp INTEGER NOT NULL,
-  present_on    TEXT    NOT NULL CHECK (present_on IN ('a','b')),
-  missing_on    TEXT    NOT NULL CHECK (missing_on IN ('a','b')),
+  present_on    TEXT    NOT NULL,
+  missing_on    TEXT    NOT NULL,
   cause         TEXT    NOT NULL DEFAULT 'pending'
                 CHECK (cause IN ('pending','sync_lag','relay_filtered','version_rule','unexplained')),
   note          TEXT,
@@ -62,14 +62,16 @@ CREATE TABLE IF NOT EXISTS scans (
   messages_a   INTEGER NOT NULL,
   messages_b   INTEGER NOT NULL,
   new_diffs    INTEGER NOT NULL,
-  errors       INTEGER NOT NULL
+  errors       INTEGER NOT NULL,
+  messages_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS stalls (
   id                INTEGER PRIMARY KEY,
-  side              TEXT    NOT NULL CHECK (side IN ('a','b')),
+  side              TEXT    NOT NULL,
   shard_id          INTEGER NOT NULL,
   stuck_height      INTEGER NOT NULL,
+  peer              TEXT,
   peer_height_start INTEGER NOT NULL,
   peer_height_end   INTEGER,
   max_block_delay   INTEGER NOT NULL DEFAULT 0,
@@ -83,7 +85,19 @@ CREATE INDEX IF NOT EXISTS stalls_open ON stalls (ended_at, side, shard_id);
 const MIGRATIONS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "info_snapshots", column: "num_shards", ddl: "ALTER TABLE info_snapshots ADD COLUMN num_shards INTEGER" },
   { table: "diffs", column: "shard", ddl: "ALTER TABLE diffs ADD COLUMN shard INTEGER" },
+  // Multi-node (v0.2): which peer a stall was measured against, and per-node cast counts.
+  { table: "stalls", column: "peer", ddl: "ALTER TABLE stalls ADD COLUMN peer TEXT" },
+  { table: "scans", column: "messages_json", ddl: "ALTER TABLE scans ADD COLUMN messages_json TEXT" },
 ];
+
+/** Tables whose pre-multi-node CHECK pinned side values to 'a'/'b'. */
+const SIDE_TABLES = ["info_snapshots", "diffs", "stalls"] as const;
+
+/** Labels that the two-node database's 'a' and 'b' rows mean. Positional: a = first node, b = second. */
+export interface LegacyLabels {
+  a: string;
+  b: string;
+}
 
 type Row = Record<string, unknown>;
 const n = (v: unknown): number => Number(v);
@@ -123,6 +137,7 @@ const toStall = (r: Row): StallRow => ({
   side: r.side as Side,
   shardId: n(r.shard_id),
   stuckHeight: n(r.stuck_height),
+  peer: s(r.peer),
   peerHeightStart: n(r.peer_height_start),
   peerHeightEnd: nn(r.peer_height_end),
   maxBlockDelay: n(r.max_block_delay),
@@ -133,7 +148,11 @@ const toStall = (r: Row): StallRow => ({
 export class SqliteStore implements Store {
   private readonly db: DatabaseSync;
 
-  constructor(path: string) {
+  /**
+   * `legacy` names what a pre-multi-node database's 'a' and 'b' rows mean (the first and
+   * second configured node). Pass it from the entrypoint; tests on fresh databases omit it.
+   */
+  constructor(path: string, legacy?: LegacyLabels) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec(SCHEMA);
@@ -142,30 +161,56 @@ export class SqliteStore implements Store {
       if (!cols.some((c) => c.name === m.column)) this.db.exec(m.ddl);
     }
     this.migrateCauseCheck();
+    this.migrateSideCheck();
+    if (legacy !== undefined) this.relabelLegacySides(legacy);
+  }
+
+  private tableSql(name: string): string {
+    const row = this.db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name) as Row | undefined;
+    return String(row?.sql ?? "");
   }
 
   /**
-   * SQLite cannot alter a CHECK constraint in place. When an older database's `diffs` table
-   * lacks a cause that CAUSES now includes, rebuild the table around the current SCHEMA and
-   * copy every row across. Runs once; a current database is left untouched.
+   * SQLite cannot alter a CHECK constraint in place: rename the table, re-run SCHEMA so the
+   * current definition (and its indexes) comes back, copy every row across, drop the old copy.
+   * Runs inside one transaction; a current database is left untouched by the callers below.
    */
-  private migrateCauseCheck(): void {
-    const row = this.db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'diffs'`).get() as Row | undefined;
-    const sql = String(row?.sql ?? "");
-    if (CAUSES.every((c) => sql.includes(`'${c}'`))) return;
-    const cols = (this.db.prepare(`PRAGMA table_info(diffs)`).all() as Row[]).map((c) => String(c.name)).join(", ");
+  private rebuildTable(name: string): void {
+    const cols = (this.db.prepare(`PRAGMA table_info(${name})`).all() as Row[]).map((c) => String(c.name)).join(", ");
     this.db.exec("BEGIN");
     try {
-      this.db.exec(`ALTER TABLE diffs RENAME TO diffs_old`);
-      // Re-running SCHEMA recreates `diffs` (and its indexes) with the current CHECK.
+      this.db.exec(`ALTER TABLE ${name} RENAME TO ${name}_old`);
       this.db.exec(SCHEMA);
-      this.db.exec(`INSERT INTO diffs (${cols}) SELECT ${cols} FROM diffs_old`);
-      this.db.exec(`DROP TABLE diffs_old`);
+      this.db.exec(`INSERT INTO ${name} (${cols}) SELECT ${cols} FROM ${name}_old`);
+      this.db.exec(`DROP TABLE ${name}_old`);
       this.db.exec("COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");
       throw e;
     }
+  }
+
+  /** Older `diffs` tables lack a cause that CAUSES now includes. */
+  private migrateCauseCheck(): void {
+    const sql = this.tableSql("diffs");
+    if (CAUSES.every((c) => sql.includes(`'${c}'`))) return;
+    this.rebuildTable("diffs");
+  }
+
+  /** Pre-multi-node tables pinned side columns to 'a'/'b'; any label is valid now. */
+  private migrateSideCheck(): void {
+    for (const t of SIDE_TABLES) {
+      if (this.tableSql(t).includes("IN ('a','b')")) this.rebuildTable(t);
+    }
+  }
+
+  /** Rows written by the two-node version say 'a'/'b'; give them the labels they meant. */
+  private relabelLegacySides(legacy: LegacyLabels): void {
+    const run = (sql: string) => this.db.prepare(sql).run(legacy.a, legacy.b);
+    run(`UPDATE info_snapshots SET side = CASE side WHEN 'a' THEN ? WHEN 'b' THEN ? ELSE side END WHERE side IN ('a','b')`);
+    run(`UPDATE stalls SET side = CASE side WHEN 'a' THEN ? WHEN 'b' THEN ? ELSE side END WHERE side IN ('a','b')`);
+    run(`UPDATE diffs SET present_on = CASE present_on WHEN 'a' THEN ? WHEN 'b' THEN ? ELSE present_on END WHERE present_on IN ('a','b')`);
+    run(`UPDATE diffs SET missing_on = CASE missing_on WHEN 'a' THEN ? WHEN 'b' THEN ? ELSE missing_on END WHERE missing_on IN ('a','b')`);
   }
 
   async recordInfo(x: InfoSnapshot): Promise<void> {
@@ -257,12 +302,17 @@ export class SqliteStore implements Store {
   }
 
   async recordScan(r: ScanRun): Promise<void> {
+    // messages_a keeps the reference node's count and messages_b the sum of every other
+    // node, so older tooling that reads the two columns still sees sensible numbers; the
+    // per-node breakdown is in messages_json.
+    const refCount = r.messagesByNode[r.reference] ?? 0;
+    const otherCount = Object.entries(r.messagesByNode).reduce((sum, [l, c]) => (l === r.reference ? sum : sum + c), 0);
     this.db
       .prepare(
-        `INSERT INTO scans (started_at, finished_at, fids_scanned, messages_a, messages_b, new_diffs, errors)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO scans (started_at, finished_at, fids_scanned, messages_a, messages_b, new_diffs, errors, messages_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(r.startedAt, r.finishedAt, r.fidsScanned, r.messagesA, r.messagesB, r.newDiffs, r.errors);
+      .run(r.startedAt, r.finishedAt, r.fidsScanned, refCount, otherCount, r.newDiffs, r.errors, JSON.stringify(r.messagesByNode));
   }
 
   async openStalls(): Promise<StallRow[]> {
@@ -275,10 +325,10 @@ export class SqliteStore implements Store {
   async startStall(x: NewStall): Promise<number> {
     const res = this.db
       .prepare(
-        `INSERT INTO stalls (side, shard_id, stuck_height, peer_height_start, started_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO stalls (side, shard_id, stuck_height, peer, peer_height_start, started_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(x.side, x.shardId, x.stuckHeight, x.peerHeightStart, x.startedAt);
+      .run(x.side, x.shardId, x.stuckHeight, x.peer, x.peerHeightStart, x.startedAt);
     return Number(res.lastInsertRowid);
   }
 
@@ -316,11 +366,11 @@ export class SqliteStore implements Store {
     for (const r of this.db.prepare(`SELECT cause, COUNT(*) AS c FROM diffs GROUP BY cause`).all() as Row[]) {
       byCause[r.cause as Cause] = n(r.c);
     }
-    const byMissingSide: Record<Side, number> = { a: 0, b: 0 };
+    const byMissingNode: Record<Side, number> = {};
     for (const r of this.db
       .prepare(`SELECT missing_on, COUNT(*) AS c FROM diffs WHERE cause = 'unexplained' GROUP BY missing_on`)
       .all() as Row[]) {
-      byMissingSide[r.missing_on as Side] = n(r.c);
+      byMissingNode[String(r.missing_on)] = n(r.c);
     }
     const scan = this.db.prepare(`SELECT COUNT(*) AS c, MAX(finished_at) AS last FROM scans`).get() as Row;
     const st = this.db
@@ -328,7 +378,7 @@ export class SqliteStore implements Store {
       .get() as Row;
     return {
       byCause,
-      byMissingSide,
+      byMissingNode,
       scans: n(scan.c),
       lastScanAt: nn(scan.last),
       openStalls: n(st.open ?? 0),

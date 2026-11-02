@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { CLIENT_STATUSES, type ClientHealth, type ClientStatus } from "./clients.js";
-import type { Config } from "./config.js";
+import { comparedNodes, nodeOf, type Config } from "./config.js";
 import type { Store } from "./store/store.js";
 import { CAUSES, type Cause, type DiffRow, type InfoSnapshot, type Side, type StallRow } from "./types.js";
 
@@ -42,11 +42,15 @@ const isCause = (v: string | undefined): v is Cause => v !== undefined && (CAUSE
 
 export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth[]): Hono {
   const app = new Hono();
-  const label = (s: Side) => (s === "a" ? cfg.a.label : cfg.b.label);
+  // Node ids in the database ARE the configured labels, so rows render as-is.
+  const label = (s: Side) => s;
+  const nodeLabels = cfg.nodes.map((n) => n.label);
+  const latestInfos = async (): Promise<Record<Side, InfoSnapshot | null>> =>
+    Object.fromEntries(await Promise.all(nodeLabels.map(async (l) => [l, await store.latestInfo(l)] as const)));
 
   app.get("/api/summary", async (c) => {
-    const [summary, a, b] = await Promise.all([store.summary(), store.latestInfo("a"), store.latestInfo("b")]);
-    return c.json({ nodes: { a: cfg.a.label, b: cfg.b.label }, summary, info: { a, b } });
+    const [summary, info] = await Promise.all([store.summary(), latestInfos()]);
+    return c.json({ nodes: nodeLabels, reference: cfg.reference, summary, info });
   });
 
   app.get("/api/diffs", async (c) => {
@@ -67,10 +71,9 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
 
   app.get("/", async (c) => {
     const now = Date.now();
-    const [summary, ia, ib, unexplained, pending, stalls] = await Promise.all([
+    const [summary, infos, unexplained, pending, stalls] = await Promise.all([
       store.summary(),
-      store.latestInfo("a"),
-      store.latestInfo("b"),
+      latestInfos(),
       store.listDiffs({ cause: "unexplained", limit: 100 }),
       store.listDiffs({ cause: "pending", limit: 25 }),
       store.listStalls({ limit: 50 }),
@@ -90,8 +93,8 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
           )
           .join("") ?? "";
       return `<section class="card">
-        <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span></h2>
-        <p class="muted">${esc(side === "a" ? cfg.a.url : cfg.b.url)} · checked ${ago(i?.at ?? null, now)}</p>
+        <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span>${side === cfg.reference ? ` <span class="pill muted">reference</span>` : ""}</h2>
+        <p class="muted">${esc(nodeOf(cfg, side)?.url ?? "")} · checked ${ago(i?.at ?? null, now)}</p>
         ${i?.error ? `<p class="bad-text">${esc(i.error)}</p>` : ""}
         ${shards ? `<table><thead><tr><th>Shard</th><th>Height</th><th>Block delay</th></tr></thead><tbody>${shards}</tbody></table>` : ""}
       </section>`;
@@ -153,12 +156,12 @@ ${list
     const stallsHtml = (rows: StallRow[]) =>
       rows.length === 0
         ? `<p class="muted">None recorded.</p>`
-        : `<div class="scroll"><table><thead><tr><th>Node</th><th>Shard</th><th>Started</th><th>Duration</th><th>Stuck at</th><th>Peer reached</th><th>Worst delay</th></tr></thead><tbody>
+        : `<div class="scroll"><table><thead><tr><th>Node</th><th>Shard</th><th>Started</th><th>Duration</th><th>Stuck at</th><th>Peer</th><th>Peer reached</th><th>Worst delay</th></tr></thead><tbody>
           ${rows
             .map(
               (s) => `<tr><td>${esc(label(s.side))}</td><td>${s.shardId}</td><td>${new Date(s.startedAt).toISOString().replace("T", " ").slice(0, 19)}Z</td>
               <td>${s.endedAt === null ? `<span class="pill bad">ongoing ${dur(s.startedAt, now)}</span>` : dur(s.startedAt, s.endedAt)}</td>
-              <td>${s.stuckHeight.toLocaleString()}</td><td>${(s.peerHeightEnd ?? s.peerHeightStart).toLocaleString()}</td><td>${s.maxBlockDelay}s</td></tr>`,
+              <td>${s.stuckHeight.toLocaleString()}</td><td>${esc(s.peer ?? "")}</td><td>${(s.peerHeightEnd ?? s.peerHeightStart).toLocaleString()}</td><td>${s.maxBlockDelay}s</td></tr>`,
             )
             .join("")}</tbody></table></div>`;
 
@@ -181,14 +184,14 @@ table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;p
 th{font-weight:600;color:var(--muted)}.mono{font-family:ui-monospace,monospace}.scroll{overflow:auto;max-height:420px}
 td.text{white-space:normal;min-width:240px;max-width:460px}
 </style></head><body><main>
-<h1>snapdiff: ${esc(cfg.a.label)} vs ${esc(cfg.b.label)}</h1>
+<h1>snapdiff: ${esc(cfg.reference)} vs ${comparedNodes(cfg).map((n) => esc(n.label)).join(", ")}</h1>
 <p class="muted">Scans run every ${Math.round(cfg.scanIntervalMs / 60000)} min: ${summary.scans} so far, last ${ago(summary.lastScanAt, now)}, next in about ${nextScanIn(summary.lastScanAt, cfg.scanIntervalMs, now)}. This page reloads every 30 s. Read-only.</p>
 <div class="stats">${counts}</div>
-<div class="grid">${nodeCard("a", ia)}${nodeCard("b", ib)}</div>
+<div class="grid">${nodeLabels.map((l) => nodeCard(l, infos[l] ?? null)).join("")}</div>
 ${clientsHtml(clients?.() ?? [])}
 <section class="card" style="margin-bottom:12px"><h2>Shard stalls${summary.openStalls > 0 ? ` <span class="pill bad">${summary.openStalls} ongoing</span>` : ""}</h2>
 <p class="muted">A shard on one node stopped advancing while the same shard on the other node kept going. Diffs on a stalled shard stay pending until it recovers.</p>${stallsHtml(stalls)}</section>
-<section class="card"><h2>Unexplained</h2><p class="muted">Missing on ${esc(cfg.a.label)}: ${summary.byMissingSide.a} · missing on ${esc(cfg.b.label)}: ${summary.byMissingSide.b}. Rows are rechecked for ${Math.round(cfg.recheckWindowMs / 3600000)} h; one that turns up on the missing side moves to sync lag and leaves this list.</p>${rowsHtml(unexplained, summary.byCause.unexplained)}</section>
+<section class="card"><h2>Unexplained</h2><p class="muted">${nodeLabels.map((l) => `Missing on ${esc(l)}: ${summary.byMissingNode[l] ?? 0}`).join(" · ")}. Rows are rechecked for ${Math.round(cfg.recheckWindowMs / 3600000)} h; one that turns up on the missing side moves to sync lag and leaves this list.</p>${rowsHtml(unexplained, summary.byCause.unexplained)}</section>
 <section class="card" style="margin-top:12px"><h2>Pending</h2><p class="muted">Seen on one side, not yet old enough or not yet rechecked. Most resolve on their own.</p>${rowsHtml(pending, summary.byCause.pending)}</section>
 </main></body></html>`);
   });

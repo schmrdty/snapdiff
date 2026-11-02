@@ -21,8 +21,10 @@ const headersFrom = (name: string): Record<string, string> => {
 };
 
 export interface Config {
-  a: NodeConfig;
-  b: NodeConfig;
+  /** Two or more nodes. Labels are unique and double as the node id in the database. */
+  nodes: NodeConfig[];
+  /** Label of the node every other node is compared against. */
+  reference: string;
   dbPath: string;
   port: number;
   /** FIDs always scanned: your watchlist (for example, accounts that declined the contract). */
@@ -88,6 +90,63 @@ export const parseFidList = (text: string): number[] =>
     .map(Number)
     .filter((n) => Number.isInteger(n) && n > 0);
 
+const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,23}$/;
+/** "ohsnap" -> NODE_OHSNAP_URL; "open-caster" -> NODE_OPEN_CASTER_URL. */
+export const envKeyFor = (label: string): string => label.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+
+/**
+ * Nodes come from NODES="label,label,..." with NODE_<LABEL>_URL / NODE_<LABEL>_HEADERS per
+ * label, or, when NODES is unset, from the original two-node NODE_A_* / NODE_B_* variables.
+ * REFERENCE_NODE picks the node the others are compared against (default: the first).
+ */
+export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeConfig[]; reference: string } {
+  const read = (name: string, fallback: string): string => {
+    const raw = env[name];
+    return raw === undefined || raw === "" ? fallback : raw;
+  };
+  const headers = (name: string): Record<string, string> => {
+    const saved = process.env[name];
+    const raw = env[name];
+    if (raw === undefined || raw.trim() === "") return {};
+    // headersFrom reads process.env; route through it so the one JSON parser is shared.
+    process.env[name] = raw;
+    try {
+      return headersFrom(name);
+    } finally {
+      if (saved === undefined) delete process.env[name];
+      else process.env[name] = saved;
+    }
+  };
+  const listed = read("NODES", "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "");
+  const nodes: NodeConfig[] =
+    listed.length === 0
+      ? [
+          { label: read("NODE_A_LABEL", "snapchain"), url: read("NODE_A_URL", "http://127.0.0.1:3381").replace(/\/$/, ""), headers: headers("NODE_A_HEADERS") },
+          { label: read("NODE_B_LABEL", "hypersnap"), url: read("NODE_B_URL", "http://127.0.0.1:4381").replace(/\/$/, ""), headers: headers("NODE_B_HEADERS") },
+        ]
+      : listed.map((label) => {
+          const k = envKeyFor(label);
+          const url = read(`NODE_${k}_URL`, "");
+          if (url === "") throw new Error(`NODES lists "${label}" but NODE_${k}_URL is not set`);
+          return { label, url: url.replace(/\/$/, ""), headers: headers(`NODE_${k}_HEADERS`) };
+        });
+  if (nodes.length < 2) throw new Error("at least two nodes are required");
+  const seen = new Set<string>();
+  for (const n of nodes) {
+    if (!LABEL_RE.test(n.label)) throw new Error(`node label "${n.label}" must be 1 to 24 letters, digits, or dashes`);
+    if (seen.has(n.label)) throw new Error(`duplicate node label "${n.label}"`);
+    seen.add(n.label);
+  }
+  const reference = read("REFERENCE_NODE", nodes[0]!.label);
+  if (!seen.has(reference)) throw new Error(`REFERENCE_NODE "${reference}" is not one of: ${nodes.map((n) => n.label).join(", ")}`);
+  return { nodes, reference };
+}
+
+export const nodeOf = (cfg: Pick<Config, "nodes">, label: string): NodeConfig | undefined => cfg.nodes.find((n) => n.label === label);
+
 export function loadConfig(): Config {
   const watch = new Set<number>(parseFidList(str("WATCH_FIDS", "")));
   const file = str("WATCH_FIDS_FILE", "");
@@ -101,17 +160,10 @@ export function loadConfig(): Config {
   }
 
   const min = 60_000;
+  const { nodes, reference } = loadNodes();
   return {
-    a: {
-      label: str("NODE_A_LABEL", "snapchain"),
-      url: str("NODE_A_URL", "http://127.0.0.1:3381").replace(/\/$/, ""),
-      headers: headersFrom("NODE_A_HEADERS"),
-    },
-    b: {
-      label: str("NODE_B_LABEL", "hypersnap"),
-      url: str("NODE_B_URL", "http://127.0.0.1:4381").replace(/\/$/, ""),
-      headers: headersFrom("NODE_B_HEADERS"),
-    },
+    nodes,
+    reference,
     dbPath: str("DB_PATH", "./data/snapdiff.db"),
     port: num("PORT", 8787),
     watchFids: [...watch].sort((x, y) => x - y),
@@ -142,5 +194,5 @@ export function loadConfig(): Config {
   };
 }
 
-export const labelOf = (cfg: Pick<Config, "a" | "b">, side: "a" | "b"): string =>
-  side === "a" ? cfg.a.label : cfg.b.label;
+/** Every node except the reference, in config order. */
+export const comparedNodes = (cfg: Pick<Config, "nodes" | "reference">): NodeConfig[] => cfg.nodes.filter((n) => n.label !== cfg.reference);
