@@ -11,10 +11,7 @@ import { HubClient } from "../dist/src/hub.js";
 const cfg = loadConfig();
 const fids = process.argv.slice(2).map(Number).filter((n) => Number.isInteger(n) && n > 0);
 if (!fids.length) { console.error("usage: probe-window.mjs <fid> [fid...]"); process.exit(1); }
-const hubs = {
-  a: new HubClient("a", cfg.a.url, cfg.requestTimeoutMs, cfg.a.headers),
-  b: new HubClient("b", cfg.b.url, cfg.requestTimeoutMs, cfg.b.headers),
-};
+const hubs = cfg.nodes.map((n) => [n.label, new HubClient(n.label, n.url, cfg.requestTimeoutMs, n.headers)]);
 const nowSec = Math.floor(Date.now() / 1000);
 const windows = {
   "scan 24h": [nowSec - cfg.lookbackHours * 3600, nowSec - cfg.graceSeconds],
@@ -23,13 +20,13 @@ const windows = {
 for (const fid of fids) {
   for (const [name, [start, stop]] of Object.entries(windows)) {
     const row = [];
-    for (const side of ["a", "b"]) {
+    for (const [label, hub] of hubs) {
       try {
-        const msgs = await hubs[side].castsByFid(fid, start, stop, cfg.maxPagesPerFid);
+        const msgs = await hub.castsByFid(fid, start, stop, cfg.maxPagesPerFid);
         const newest = msgs.map((m) => m.data?.timestamp ?? 0).sort((x, y) => y - x)[0];
-        row.push(`${cfg[side].label}=${msgs.length}${newest ? ` (newest fc-ts ${newest})` : ""}`);
+        row.push(`${label}=${msgs.length}${newest ? ` (newest fc-ts ${newest})` : ""}`);
       } catch (e) {
-        row.push(`${cfg[side].label}=ERR ${e instanceof Error ? e.message : String(e)}`);
+        row.push(`${label}=ERR ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     console.log(`fid ${fid} ${name.padEnd(13)} ${row.join("  ")}`);

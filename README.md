@@ -1,8 +1,8 @@
 # snapdiff
 
-Read-only comparator for two Farcaster-protocol nodes (Snapchain and Hypersnap). It asks both nodes for the same casts, diffs them by message hash, and tags every difference with a cause. Only one cause, `unexplained`, is worth investigating.
+Read-only comparator for Farcaster-protocol nodes (Snapchain and Hypersnap). It asks every configured node for the same casts, records which nodes have each one, and tags every difference with a cause and a scope: `node` when the node's own network peers have the cast (that node's problem), `network` when every node of that network lacks it (the networks disagree). Only one cause, `unexplained`, is worth investigating. Two nodes is the minimum; any number works (`docs/MULTI-NODE.md`).
 
-It never writes to either network. It only reads.
+It never writes to any network. It only reads.
 
 ## Quick start (no real nodes needed)
 
@@ -37,16 +37,18 @@ Other hubs listed on hypersnap.org (`hub.pinata.cloud`, `hub.farcaster.standardc
 
 Expected today, before the fork: zero diffs and zero stalls, because both nodes follow the same validators. The interesting output starts when one side falls behind or the networks split.
 
-## Your own nodes
+## Your own nodes, and more than two
 
 Run each node on its own machine (both default to ports 3381-3383, and a Snapchain node needs about 2 TB of disk), then point `NODE_A_URL` and `NODE_B_URL` at them. Everything else is the same as above.
+
+To compare three or more nodes, list them in `NODES` and give each its own `NODE_<LABEL>_URL`, `NODE_<LABEL>_NETWORK` (`snapchain` or `hypersnap`), and `NODE_<LABEL>_HEADERS` when a key is needed. The labels become the node ids in the database, the dashboard, and the API; the network tag is what lets snapdiff tell "one Hypersnap node is behind" from "Hypersnap and Snapchain disagree". Example and migration notes in `docs/MULTI-NODE.md`.
 
 ## How it works
 
 | Loop | Default interval | What it does |
 |---|---|---|
-| info | 60 s | Polls `/v1/info` on both nodes. Stores shard heights and worst `blockDelay`. |
-| scan | 15 min | For watchlist FIDs plus `SAMPLE_SIZE` random FIDs, fetches casts from the last `LOOKBACK_HOURS` on both nodes. Records every hash present on one side only. |
+| info | 60 s | Polls `/v1/info` on every node. Stores shard heights and worst `blockDelay`; a shard stall is a node far behind its healthiest peer on that shard. |
+| scan | 15 min | For watchlist FIDs plus `SAMPLE_SIZE` random FIDs, fetches casts from the last `LOOKBACK_HOURS` on every node and merges them into one presence picture per FID. Records one row per (hash, node that lacks it), with the nodes that had it and a scope (`node` or `network`). |
 | recheck | 60 s | For open diffs older than `RECHECK_AFTER_MIN`, asks the missing node for that exact hash via `/v1/castById`, then classifies. |
 
 ## Causes
@@ -112,8 +114,8 @@ A one-sided fetch failure never creates a diff. The FID is skipped for that scan
 | Route | Returns |
 |---|---|
 | `GET /` | Dashboard (auto-refresh 30 s) |
-| `GET /api/summary` | Counts by cause, latest node info |
-| `GET /api/diffs?cause=unexplained&limit=200` | Diff rows with the full message JSON and shard |
+| `GET /api/summary` | `nodes` (labels, in order), `networks` (network to labels), `reference`, counts by cause, by missing node (`summary.byMissingNode`), by scope (`summary.byScope`), per-network disagreements (`summary.networkSplit`), latest `/v1/info` per node (`info[label]`) |
+| `GET /api/diffs?cause=unexplained&limit=200` | Diff rows with the full message JSON, shard, `presentNodes`, and `scope` |
 | `GET /api/stalls?limit=200` | Shard stall events, newest first |
 
 ## Moving to SpacetimeDB later
@@ -144,7 +146,7 @@ Shows whether the apps people use on each network (Vibeshift, Quilcast, Quorum, 
 
 ## Deploying
 
-`deploy/` holds a tested kit for a standalone Ubuntu VPS: an idempotent bootstrap (key-only SSH, firewall, Node 24, locked app user, systemd unit, Caddy with automatic TLS) and a desktop-side build-and-rsync deploy script. Runbook in `deploy/README.md`. `scripts/probe-window.mjs` checks what the two nodes return for given FIDs in the scan's own time window; useful when the dashboard shows nothing.
+`deploy/` holds a tested kit for a standalone Ubuntu VPS: an idempotent bootstrap (key-only SSH, firewall, Node 24, locked app user, systemd unit, Caddy with automatic TLS) and a desktop-side build-and-rsync deploy script. Runbook in `deploy/README.md`. `scripts/probe-window.mjs` checks what each node returns for given FIDs in the scan's own time window; useful when the dashboard shows nothing.
 
 ## Requirements
 
@@ -162,6 +164,7 @@ Node 22.5 or newer (uses the built-in `node:sqlite`, so there are no native modu
 | `src/store/sqlite.ts` | SQLite schema and store |
 | `src/server.ts` | Hono dashboard and JSON API |
 | `src/clients.ts` | Optional client status checks (`docs/CLIENT-HEALTH.md`) |
+| `src/config.ts` | Env parsing, including the N-node `NODES` form (`docs/MULTI-NODE.md`) |
 | `src/report.ts` | Daily canonical report and hash |
 | `scripts/check-nodes.ts` | Preflight compatibility check |
 | `scripts/mock-hubs.ts` | Two fake nodes with seeded scenarios |
