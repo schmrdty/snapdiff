@@ -51,6 +51,8 @@ Write down the IPv4 address the portal shows. Everything below uses `<IP>`.
 
    Repeat for `NODE_A_HEADERS={"x-api-key":"..."}`, `NODE_B_URL=https://haatz.quilibrium.com`, `CONCURRENCY=2`, and any tuning from `.env.example`. Or edit it in place: `ssh -t snapdiff 'sudo nano /srv/snapdiff/.env'`.
 
+   For three or more nodes switch to the `NODES` form (`docs/MULTI-NODE.md`). Adding a node to a running deployment is: append its `NODE_<LABEL>_URL` line, set `NODES` to the full list, `sudo systemctl restart snapdiff`. The existing database keeps its history; the first start after the switch relabels the old two-node rows to the first two labels in `NODES`, so keep the original two nodes first and in the same order.
+
 7. Deploy (builds here, ships, installs prod deps there, restarts, checks):
 
    `deploy/deploy.sh snapdiff`

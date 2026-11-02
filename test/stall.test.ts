@@ -40,16 +40,32 @@ test("shardForFid: exact algorithm, stable vectors, range", () => {
 test("detectStalls: one side stuck on one shard, other healthy", () => {
   const a = info("a", { 0: 3, 1: 4, 2: 5 }, { 2: 5000 });
   const b = info("b", { 0: 3, 1: 4, 2: 400 }, { 2: 4100 });
-  const s = detectStalls(a, b, 50);
+  const s = detectStalls([a, b], 50);
   assert.equal(s.length, 1);
-  assert.deepEqual(s[0], { side: "b", shardId: 2, stuckHeight: 4100, blockDelay: 400, peerHeight: 5000, peerBlockDelay: 5 });
+  assert.deepEqual(s[0], { side: "b", shardId: 2, stuckHeight: 4100, blockDelay: 400, peer: "a", peerHeight: 5000, peerBlockDelay: 5 });
 });
 
 test("detectStalls: both slow is a network slowdown, not a stall; unreachable is unknown", () => {
-  assert.equal(detectStalls(info("a", { 1: 300 }), info("b", { 1: 310 }), 50).length, 0);
-  assert.equal(detectStalls(info("a", { 1: 3 }), null, 50).length, 0);
+  assert.equal(detectStalls([info("a", { 1: 300 }), info("b", { 1: 310 })], 50).length, 0);
+  assert.equal(detectStalls([info("a", { 1: 3 }), null], 50).length, 0);
   const down: InfoSnapshot = { ...info("b", { 1: 3 }), reachable: false };
-  assert.equal(detectStalls(info("a", { 1: 3 }), down, 50).length, 0);
+  assert.equal(detectStalls([info("a", { 1: 3 }), down], 50).length, 0);
+});
+
+test("detectStalls with three nodes: measured against the healthiest peer; all-slow is not a stall", () => {
+  const ref = info("ref", { 1: 4 }, { 1: 9000 });
+  const slowish = info("x", { 1: 40 }, { 1: 8990 });
+  const stuck = info("y", { 1: 900 }, { 1: 7000 });
+  const s = detectStalls([ref, slowish, stuck], 50);
+  assert.equal(s.length, 1, "only y is stalled; x is under the threshold");
+  assert.equal(s[0]?.side, "y");
+  assert.equal(s[0]?.peer, "ref", "the healthiest peer, not just the reference");
+  // Reference itself stuck: still detected, measured against the best other node.
+  const refStuck = info("ref", { 1: 500 }, { 1: 7000 });
+  const t = detectStalls([refStuck, slowish, info("y", { 1: 3 }, { 1: 9100 })], 50);
+  assert.deepEqual(t.map((v) => [v.side, v.peer]), [["ref", "y"]]);
+  // Every node slow on the shard: network slowdown.
+  assert.equal(detectStalls([info("ref", { 1: 300 }), info("x", { 1: 400 }), info("y", { 1: 350 })], 50).length, 0);
 });
 
 test("shardBehind: per-shard gate falls back to whole node without a tag", () => {
@@ -62,7 +78,19 @@ test("shardBehind: per-shard gate falls back to whole node without a tag", () =>
 
 test("stall lifecycle: start, touch, end; recheck pauses only the stalled shard", async () => {
   const store = new SqliteStore(":memory:");
-  const cfg = { ...loadConfig(), behindBlockDelay: 50, recheckAfterMs: 0, recheckWindowMs: 1e12, unexplainedAfterMs: 0 };
+  // Node labels in this test are "a" and "b"; config must agree so the loops look them up.
+  const cfg = {
+    ...loadConfig(),
+    nodes: [
+      { label: "a", url: "http://a.test", headers: {} },
+      { label: "b", url: "http://b.test", headers: {} },
+    ],
+    reference: "a",
+    behindBlockDelay: 50,
+    recheckAfterMs: 0,
+    recheckWindowMs: 1e12,
+    unexplainedAfterMs: 0,
+  };
   const logs: string[] = [];
   let t = 1_000_000;
   const hub = { hasCast: async () => false, knowsFid: async () => true } as unknown as HubClient;
@@ -82,7 +110,7 @@ test("stall lifecycle: start, touch, end; recheck pauses only the stalled shard"
   const a1 = info("a", { 0: 3, 1: 4, 2: 5 }, { 2: 5000 });
   const b1 = info("b", { 0: 3, 1: 4, 2: 120 }, { 2: 4900 });
   for (const s of [a1, b1]) await store.recordInfo(s);
-  await updateStalls(deps, a1, b1);
+  await updateStalls(deps, [a1, b1]);
   let open = await store.openStalls();
   assert.equal(open.length, 1);
   assert.equal(open[0]!.maxBlockDelay, 120);
@@ -97,7 +125,7 @@ test("stall lifecycle: start, touch, end; recheck pauses only the stalled shard"
   // Still stalled next tick: same record, worse delay.
   t += 60_000;
   const b2 = info("b", { 0: 3, 1: 4, 2: 180 }, { 2: 4900 });
-  await updateStalls(deps, a1, b2);
+  await updateStalls(deps, [a1, b2]);
   open = await store.openStalls();
   assert.equal(open.length, 1);
   assert.equal(open[0]!.maxBlockDelay, 180);
@@ -105,10 +133,11 @@ test("stall lifecycle: start, touch, end; recheck pauses only the stalled shard"
   // Recovered.
   t += 60_000;
   const b3 = info("b", { 0: 3, 1: 4, 2: 6 }, { 2: 5120 });
-  await updateStalls(deps, a1, b3);
+  await updateStalls(deps, [a1, b3]);
   assert.equal((await store.openStalls()).length, 0);
   const done = (await store.listStalls({}))[0]!;
   assert.equal(done.endedAt, t);
+  assert.equal(done.peer, "a");
   assert.equal(done.peerHeightEnd, 5000);
   assert.match(logs.at(-1) ?? "", /END .* shard 2 after 2m/);
   assert.equal((await store.summary()).totalStalls, 1);

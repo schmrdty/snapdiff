@@ -17,7 +17,7 @@ export function canonicalJson(v: unknown): string {
     .join(",")}}`;
 }
 
-export async function buildReport(store: Store, labels: { a: string; b: string }, dayUtc: string) {
+export async function buildReport(store: Store, nodes: { reference: string; labels: string[] }, dayUtc: string) {
   const from = Date.parse(`${dayUtc}T00:00:00Z`);
   if (Number.isNaN(from)) throw new Error(`Bad date "${dayUtc}", expected YYYY-MM-DD`);
   const to = from + 86_400_000;
@@ -28,13 +28,14 @@ export async function buildReport(store: Store, labels: { a: string; b: string }
   const counts = Object.fromEntries(CAUSES.map((c) => [c, 0])) as Record<Cause, number>;
   for (const r of rows) counts[r.cause]++;
   const report = {
-    schema: "snapdiff.report.v2",
+    schema: "snapdiff.report.v3",
     day: dayUtc,
-    nodes: labels,
+    nodes,
     counts,
     stalls: stalls
       .map((s) => ({
-        node: s.side === "a" ? labels.a : labels.b,
+        node: s.side,
+        peer: s.peer,
         shardId: s.shardId,
         startedAt: s.startedAt,
         endedAt: s.endedAt,
@@ -57,7 +58,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const cfg = loadConfig();
   const day = process.argv[2] ?? new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
   const store = new SqliteStore(cfg.dbPath);
-  const { json, hash, report } = await buildReport(store, { a: cfg.a.label, b: cfg.b.label }, day);
+  const { json, hash, report } = await buildReport(store, { reference: cfg.reference, labels: cfg.nodes.map((n) => n.label) }, day);
   await store.close();
   mkdirSync("reports", { recursive: true });
   const path = `reports/${day}.json`;

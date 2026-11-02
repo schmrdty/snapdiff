@@ -81,14 +81,15 @@ export function classify(i: RecheckInput): Verdict {
   return { cause: "unexplained", note: "valid under both rule sets, still missing", final: false };
 }
 
-export function toNewDiff(msg: HubMessage, presentOn: Side, now: number, shard: number | null): NewDiff {
+export function toNewDiff(msg: HubMessage, presentOn: Side, missingOn: Side, now: number, shard: number | null): NewDiff {
+  if (presentOn === missingOn) throw new Error(`a diff needs two different nodes, got "${presentOn}" twice`);
   return {
     hash: msg.hash.toLowerCase(),
     fid: msg.data.fid,
     shard,
     msgTimestamp: msg.data.timestamp + 1_609_459_200,
     presentOn,
-    missingOn: presentOn === "a" ? "b" : "a",
+    missingOn,
     messageJson: JSON.stringify(msg),
     firstSeen: now,
   };

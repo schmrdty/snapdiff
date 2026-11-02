@@ -1,7 +1,9 @@
-/** Which configured node. Labels ("snapchain", "hypersnap") come from config. */
-export type Side = "a" | "b";
-
-export const otherSide = (s: Side): Side => (s === "a" ? "b" : "a");
+/**
+ * Which configured node: its label from config ("snapchain", "hypersnap", "ohsnap", ...).
+ * One node is the REFERENCE; every other node is compared against it pairwise. Before
+ * multi-node (v0.2) this was the literal "a" | "b"; old rows are relabeled on first start.
+ */
+export type Side = string;
 
 /**
  * Why two nodes disagree about a message.
@@ -83,12 +85,16 @@ export interface NewStall {
   side: Side;
   shardId: number;
   stuckHeight: number;
+  /** The healthy node this shard was measured against. */
+  peer: Side;
   peerHeightStart: number;
   startedAt: number; // unix ms
 }
 
-export interface StallRow extends NewStall {
+export interface StallRow extends Omit<NewStall, "peer"> {
   id: number;
+  /** Null only on rows written before multi-node. */
+  peer: Side | null;
   endedAt: number | null;
   peerHeightEnd: number | null;
   maxBlockDelay: number;
@@ -112,7 +118,8 @@ export interface DiffFilter {
 
 export interface Summary {
   byCause: Record<Cause, number>;
-  byMissingSide: Record<Side, number>;
+  /** Open unexplained diffs per node they are missing on. */
+  byMissingNode: Record<Side, number>;
   scans: number;
   lastScanAt: number | null;
   openStalls: number;
@@ -123,8 +130,9 @@ export interface ScanRun {
   startedAt: number;
   finishedAt: number;
   fidsScanned: number;
-  messagesA: number;
-  messagesB: number;
+  /** Casts fetched per node label during this scan. */
+  messagesByNode: Record<Side, number>;
+  reference: Side;
   newDiffs: number;
   errors: number;
 }
