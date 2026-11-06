@@ -1,0 +1,21 @@
+{
+  "name": "snapdiff-telegram",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "check": "tsc --noEmit",
+    "start": "node src/telegram.ts"
+  },
+  "dependencies": {
+    "grammy": "1.38.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "version": "1.0.0"
+}
