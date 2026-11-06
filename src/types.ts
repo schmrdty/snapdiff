@@ -59,6 +59,10 @@ export interface InfoSnapshot {
   side: Side;
   at: number; // unix ms
   reachable: boolean;
+  /** Host of the provider that answered (a node may have fallback providers). Null when none did or on old rows. */
+  provider: string | null;
+  /** Operator-readable remark when the node is up through a fallback, for example the primary is out of credits. */
+  note: string | null;
   /** Worst blockDelay across shards. Null when unreachable. */
   maxBlockDelay: number | null;
   /** Number of DATA shards (excludes shard 0), from /v1/info numShards. */

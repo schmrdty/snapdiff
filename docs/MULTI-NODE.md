@@ -45,6 +45,12 @@ NODE_OHSNAP_NETWORK=hypersnap
 - When `NODES` is unset the original `NODE_A_*` / `NODE_B_*` variables are read, with labels from `NODE_A_LABEL` / `NODE_B_LABEL` (defaults `snapchain`, `hypersnap`) and networks from `NODE_A_NETWORK` / `NODE_B_NETWORK` (defaults by slot: A is snapchain, B is hypersnap). Nothing changes for an existing two-node deployment.
 - Every node must answer the same endpoints. Run `npm run check-nodes -- <fid>` after adding one; it now walks the whole list and marks the reference.
 
+## Several providers for one node
+
+A logical node can be reachable through more than one endpoint: a free public node and a paid hosted API for the same network, for example. List them as `NODE_<LABEL>_URL`, `NODE_<LABEL>_URL_2`, `NODE_<LABEL>_URL_3`, each with its own optional `NODE_<LABEL>_HEADERS_n`. Requests go to the first provider; one that refuses (HTTP 401, 402, 403, or 429 after a short backoff) or does not answer is benched for `PROVIDER_RETRY_MIN` minutes (default 10) and the next provider takes over. The node card shows the host that is answering and, when it is not the primary, a one-line reason ("snapchain-api.neynar.com: out of credits ...; answering via snap.farcaster.xyz:3381"). `info_snapshots` records `provider` and `note` per poll.
+
+Providers are one node, not several: they must serve the same network. Do not list a Hypersnap endpoint as a fallback for a Snapchain node.
+
 ## Dashboard and API
 
 - The dashboard title reads `snapchain (1 node) vs hypersnap (3 nodes)`. It shows one card per node (the reference is tagged), a Network split card (per network: distinct casts missing on every one of its nodes, unexplained and pending), a Scope column and the full `presentNodes` list in the diff tables, a Peer column in the stalls table, and a network-wide marker when every node of a network is stalled on a shard.

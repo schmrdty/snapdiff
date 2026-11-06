@@ -4,6 +4,8 @@ Read-only comparator for Farcaster-protocol nodes (Snapchain and Hypersnap). It 
 
 It never writes to any network. It only reads.
 
+![Where snapdiff sits: it reads from every node of each network and from each client's status URL, and never writes](docs/snapdiff-overview.svg)
+
 ## Quick start (no real nodes needed)
 
 1. `npm install`
@@ -18,15 +20,19 @@ You do not need your own nodes. snapdiff only needs the HTTP API, and both netwo
 
 | Side | URL | Notes |
 |---|---|---|
-| Snapchain | `https://snapchain-api.neynar.com` | Needs `x-api-key`. Get a key at neynar.com; the docs placeholder `NEYNAR_API_DOCS` works for a quick test but is rate-limited (expect 429s). |
+| Snapchain | `https://snap.farcaster.xyz:3381` | Merkle's public node, no key (verified 2026-11-03). |
+| Snapchain | `https://snapchain-api.neynar.com` | Needs `x-api-key` and a Neynar plan with credits; answers HTTP 402 when the credits run out. |
 | Hypersnap | `https://haatz.quilibrium.com` | Canonical public node listed on hypersnap.org. No key. |
+
+A node can have several providers: `NODE_A_URL` is tried first, then `NODE_A_URL_2`, `NODE_A_URL_3`, and so on, each with its own optional `_HEADERS_n`. A provider that refuses (401, 402, 403, 429) or does not answer is benched for `PROVIDER_RETRY_MIN` minutes and the next one answers; the node card says which provider is answering and why the primary is not.
 
 Other hubs listed on hypersnap.org (`hub.pinata.cloud`, `hub.farcaster.standardcrypto.vc`) could not be reached from the test environment; try them from your own machine.
 
 1. `cp .env.example .env`, then set:
    ```
-   NODE_A_URL=https://snapchain-api.neynar.com
-   NODE_A_HEADERS={"x-api-key":"YOUR_KEY"}
+   NODE_A_URL=https://snap.farcaster.xyz:3381
+   NODE_A_URL_2=https://snapchain-api.neynar.com
+   NODE_A_HEADERS_2={"x-api-key":"YOUR_KEY"}
    NODE_B_URL=https://haatz.quilibrium.com
    CONCURRENCY=2
    ```
@@ -117,6 +123,7 @@ A one-sided fetch failure never creates a diff. The FID is skipped for that scan
 | `GET /api/summary` | `nodes` (labels, in order), `networks` (network to labels), `reference`, counts by cause, by missing node (`summary.byMissingNode`), by scope (`summary.byScope`), per-network disagreements (`summary.networkSplit`), latest `/v1/info` per node (`info[label]`) |
 | `GET /api/diffs?cause=unexplained&limit=200` | Diff rows with the full message JSON, shard, `presentNodes`, and `scope` |
 | `GET /api/stalls?limit=200` | Shard stall events, newest first |
+| `GET /llms.txt` | Plain-text description of this deployment for agents and crawlers (llms.txt layout): node list from the running config, the endpoints above with absolute links, how to read scope and cause, and doc links |
 
 ## Moving to SpacetimeDB later
 
@@ -164,6 +171,7 @@ Node 22.5 or newer (uses the built-in `node:sqlite`, so there are no native modu
 | `src/store/sqlite.ts` | SQLite schema and store |
 | `src/server.ts` | Hono dashboard and JSON API |
 | `src/clients.ts` | Optional client status checks (`docs/CLIENT-HEALTH.md`) |
+| `src/llms.ts` | `GET /llms.txt` text, generated from the config |
 | `src/config.ts` | Env parsing, including the N-node `NODES` form (`docs/MULTI-NODE.md`) |
 | `src/report.ts` | Daily canonical report and hash |
 | `scripts/check-nodes.ts` | Preflight compatibility check |

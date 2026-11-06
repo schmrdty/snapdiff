@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS info_snapshots (
   num_shards            INTEGER,
   num_fid_registrations INTEGER,
   shards_json           TEXT    NOT NULL,
-  error                 TEXT
+  error                 TEXT,
+  provider              TEXT,
+  note                  TEXT
 );
 CREATE INDEX IF NOT EXISTS info_side_at ON info_snapshots (side, at DESC);
 
@@ -97,6 +99,9 @@ const MIGRATIONS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "diffs", column: "present_json", ddl: "ALTER TABLE diffs ADD COLUMN present_json TEXT" },
   { table: "diffs", column: "scope", ddl: "ALTER TABLE diffs ADD COLUMN scope TEXT" },
   { table: "diffs", column: "missing_network", ddl: "ALTER TABLE diffs ADD COLUMN missing_network TEXT" },
+  // Provider failover: which provider answered, and why the primary did not.
+  { table: "info_snapshots", column: "provider", ddl: "ALTER TABLE info_snapshots ADD COLUMN provider TEXT" },
+  { table: "info_snapshots", column: "note", ddl: "ALTER TABLE info_snapshots ADD COLUMN note TEXT" },
 ];
 
 /** Tables whose pre-multi-node CHECK pinned side values to 'a'/'b'. */
@@ -143,6 +148,8 @@ const toInfo = (r: Row): InfoSnapshot => ({
   side: r.side as Side,
   at: n(r.at),
   reachable: n(r.reachable) === 1,
+  provider: s(r.provider),
+  note: s(r.note),
   maxBlockDelay: nn(r.max_block_delay),
   numShards: nn(r.num_shards),
   numFidRegistrations: nn(r.num_fid_registrations),
@@ -239,8 +246,8 @@ export class SqliteStore implements Store {
   async recordInfo(x: InfoSnapshot): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO info_snapshots (side, at, reachable, max_block_delay, num_shards, num_fid_registrations, shards_json, error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO info_snapshots (side, at, reachable, max_block_delay, num_shards, num_fid_registrations, shards_json, error, provider, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         x.side,
@@ -251,6 +258,8 @@ export class SqliteStore implements Store {
         x.numFidRegistrations,
         JSON.stringify(x.shards),
         x.error,
+        x.provider,
+        x.note,
       );
   }
 

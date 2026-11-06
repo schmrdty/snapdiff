@@ -23,13 +23,14 @@ const check = async (name: string, fn: () => Promise<string>) => {
 };
 
 for (const node of cfg.nodes) {
-  const hub = new HubClient(node.label, node.url, cfg.requestTimeoutMs, node.headers);
-  console.log(`\n${node.label} on ${node.network} (${node.url})${node.label === cfg.reference ? "  [reference]" : ""}`);
+  const hub = new HubClient(node.label, node.providers, cfg.requestTimeoutMs, { providerRetryMs: cfg.providerRetryMs });
+  console.log(`\n${node.label} on ${node.network} (${node.providers.map((p) => p.url).join(" -> ")})${node.label === cfg.reference ? "  [reference]" : ""}`);
 
   let numShards: number | null = null;
   await check("/v1/info", async () => {
     const i = await hub.info();
     if (!i.reachable) throw new Error(i.error ?? "unreachable");
+    if (i.note) console.log(`  note  ${i.note}`);
     numShards = i.numShards;
     if (numShards === null) throw new Error("numShards missing; shard tagging would be disabled");
     return `${numShards} data shards, worst blockDelay ${i.maxBlockDelay ?? "?"}, fids ~${i.numFidRegistrations ?? "?"}`;

@@ -1,12 +1,24 @@
 import { readFileSync, existsSync } from "node:fs";
 
+export interface Provider {
+  url: string;
+  /** Extra request headers, for hosted nodes that need a key (Neynar: x-api-key). */
+  headers: Record<string, string>;
+}
+
 export interface NodeConfig {
   label: string;
+  /** Primary provider's URL (providers[0]); kept for display and older call sites. */
   url: string;
   /** Which protocol network the node follows ("snapchain", "hypersnap"). Diff scope is judged per network. */
   network: string;
-  /** Extra request headers, for hosted nodes that need a key (Neynar: x-api-key). */
+  /** Primary provider's headers (providers[0]). */
   headers: Record<string, string>;
+  /**
+   * Ways to reach this one logical node, tried in order. A hosted endpoint that runs out of
+   * credits or rate-limits is benched and the next provider answers; same network, same data.
+   */
+  providers: Provider[];
 }
 
 const headersFrom = (name: string): Record<string, string> => {
@@ -66,6 +78,8 @@ export interface Config {
   concurrency: number;
   maxPagesPerFid: number;
   requestTimeoutMs: number;
+  /** A benched provider (out of credits, bad key, rate limited, unreachable) is retried after this long. */
+  providerRetryMs: number;
   /** Path to the clients JSON (docs/CLIENT-HEALTH.md). Empty = feature off. */
   clientHealthFile: string;
   clientHealthIntervalMs: number;
@@ -132,9 +146,23 @@ export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeCo
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s !== "");
+  // Fallback providers: NODE_<K>_URL_2 / NODE_<K>_HEADERS_2, _3, ... in order, no gaps.
+  const providersFor = (prefix: string, primary: Provider): Provider[] => {
+    const out = [primary];
+    for (let i = 2; ; i++) {
+      const url = read(`${prefix}_URL_${i}`, "");
+      if (url === "") break;
+      out.push({ url: url.replace(/\/$/, ""), headers: headers(`${prefix}_HEADERS_${i}`) });
+    }
+    return out;
+  };
+  const withProviders = (label: string, network: string, prefix: string, primaryUrl: string): NodeConfig => {
+    const providers = providersFor(prefix, { url: primaryUrl.replace(/\/$/, ""), headers: headers(`${prefix}_HEADERS`) });
+    return { label, url: providers[0]!.url, network, headers: providers[0]!.headers, providers };
+  };
   const legacy = (slot: "A" | "B", label: string, url: string, network: string): NodeConfig => {
     const l = read(`NODE_${slot}_LABEL`, label);
-    return { label: l, url: read(`NODE_${slot}_URL`, url).replace(/\/$/, ""), network: read(`NODE_${slot}_NETWORK`, inferNetwork(l) ?? network), headers: headers(`NODE_${slot}_HEADERS`) };
+    return withProviders(l, read(`NODE_${slot}_NETWORK`, inferNetwork(l) ?? network), `NODE_${slot}`, read(`NODE_${slot}_URL`, url));
   };
   const nodes: NodeConfig[] =
     listed.length === 0
@@ -145,7 +173,7 @@ export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeCo
           if (url === "") throw new Error(`NODES lists "${label}" but NODE_${k}_URL is not set`);
           const network = read(`NODE_${k}_NETWORK`, inferNetwork(label) ?? "");
           if (network === "") throw new Error(`NODE_${k}_NETWORK is not set and "${label}" does not name its network (snapchain or hypersnap)`);
-          return { label, url: url.replace(/\/$/, ""), network, headers: headers(`NODE_${k}_HEADERS`) };
+          return withProviders(label, network, `NODE_${k}`, url);
         });
   if (nodes.length < 2) throw new Error("at least two nodes are required");
   const seen = new Set<string>();
@@ -204,6 +232,7 @@ export function loadConfig(): Config {
     concurrency: num("CONCURRENCY", 4),
     maxPagesPerFid: num("MAX_PAGES_PER_FID", 20),
     requestTimeoutMs: num("REQUEST_TIMEOUT_MS", 10_000),
+    providerRetryMs: num("PROVIDER_RETRY_MIN", 10) * min,
     clientHealthFile: str("CLIENT_HEALTH_FILE", ""),
     clientHealthIntervalMs: num("CLIENT_HEALTH_INTERVAL_SEC", 60) * 1000,
   };

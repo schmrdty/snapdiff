@@ -12,6 +12,8 @@ const info = (side: Side, delays: Record<number, number>, heights: Record<number
   side,
   at: 0,
   reachable: true,
+  provider: null,
+  note: null,
   maxBlockDelay: Math.max(...Object.values(delays)),
   numShards: 2,
   numFidRegistrations: 100,
@@ -82,8 +84,8 @@ test("stall lifecycle: start, touch, end; recheck pauses only the stalled shard"
   const cfg = {
     ...loadConfig(),
     nodes: [
-      { label: "a", url: "http://a.test", network: "snapchain", headers: {} },
-      { label: "b", url: "http://b.test", network: "hypersnap", headers: {} },
+      { label: "a", url: "http://a.test", network: "snapchain", headers: {}, providers: [{ url: "http://a.test", headers: {} }] },
+      { label: "b", url: "http://b.test", network: "hypersnap", headers: {}, providers: [{ url: "http://b.test", headers: {} }] },
     ],
     reference: "a",
     behindBlockDelay: 50,

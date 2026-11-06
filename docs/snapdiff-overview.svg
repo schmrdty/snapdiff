@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" font-family="system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b6b66"/>
+    </marker>
+    <marker id="arrow-read" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2f7d4f"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="1000" fill="#f7f7f5"/>
+
+  <!-- Title -->
+  <text x="60" y="64" font-size="34" font-weight="650" fill="#1c1c1a">snapdiff: what it watches</text>
+  <text x="60" y="96" font-size="18" fill="#6b6b66">Read-only. It asks nodes and clients questions. It never writes to any network.</text>
+
+  <!-- Network: Snapchain -->
+  <g>
+    <rect x="60" y="150" width="560" height="250" rx="22" fill="#ffffff" stroke="#e3e2dd" stroke-width="2"/>
+    <text x="90" y="192" font-size="24" font-weight="650" fill="#1c1c1a">Snapchain network</text>
+    <text x="90" y="218" font-size="15" fill="#6b6b66">Farcaster protocol, V21 rules</text>
+    <!-- nodes -->
+    <rect x="90" y="245" width="220" height="110" rx="14" fill="#f7f7f5" stroke="#e3e2dd"/>
+    <text x="110" y="280" font-size="18" font-weight="600" fill="#1c1c1a">snapchain</text>
+    <text x="110" y="304" font-size="14" fill="#6b6b66">node (Neynar hosted)</text>
+    <text x="110" y="330" font-size="13" fill="#6b6b66">/v1/info  /v1/castsByFid</text>
+    <rect x="340" y="245" width="250" height="110" rx="14" fill="none" stroke="#e3e2dd" stroke-dasharray="6 6"/>
+    <text x="360" y="285" font-size="15" fill="#6b6b66">more Snapchain nodes</text>
+    <text x="360" y="308" font-size="15" fill="#6b6b66">as they are added</text>
+  </g>
+
+  <!-- Network: Hypersnap -->
+  <g>
+    <rect x="980" y="150" width="560" height="250" rx="22" fill="#ffffff" stroke="#e3e2dd" stroke-width="2"/>
+    <text x="1010" y="192" font-size="24" font-weight="650" fill="#1c1c1a">Hypersnap network</text>
+    <text x="1010" y="218" font-size="15" fill="#6b6b66">Farcaster protocol, V22 rules (ChainedCasts)</text>
+    <rect x="1010" y="245" width="160" height="110" rx="14" fill="#f7f7f5" stroke="#e3e2dd"/>
+    <text x="1028" y="280" font-size="18" font-weight="600" fill="#1c1c1a">haatz</text>
+    <text x="1028" y="304" font-size="14" fill="#6b6b66">public node</text>
+    <rect x="1185" y="245" width="160" height="110" rx="14" fill="#f7f7f5" stroke="#e3e2dd"/>
+    <text x="1203" y="280" font-size="18" font-weight="600" fill="#1c1c1a">opencaster</text>
+    <text x="1203" y="304" font-size="14" fill="#6b6b66">node</text>
+    <rect x="1360" y="245" width="160" height="110" rx="14" fill="#f7f7f5" stroke="#e3e2dd"/>
+    <text x="1378" y="280" font-size="18" font-weight="600" fill="#1c1c1a">ohsnap</text>
+    <text x="1378" y="304" font-size="14" fill="#6b6b66">node</text>
+  </g>
+
+  <!-- Relay between networks -->
+  <g>
+    <line x1="625" y1="275" x2="975" y2="275" stroke="#6b6b66" stroke-width="2.5" stroke-dasharray="10 8" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <rect x="690" y="236" width="220" height="30" rx="8" fill="#f7f7f5"/>
+    <text x="800" y="257" font-size="15" text-anchor="middle" fill="#6b6b66">relay between networks</text>
+    <text x="800" y="305" font-size="13" text-anchor="middle" fill="#6b6b66">same validators today; diverges after the fork</text>
+  </g>
+
+  <!-- Clients -->
+  <text x="60" y="470" font-size="16" font-weight="600" fill="#6b6b66" letter-spacing="1">CLIENTS PEOPLE USE  (casts are written through them)</text>
+  <g font-size="17" font-weight="600" fill="#1c1c1a">
+    <rect x="60" y="490" width="170" height="60" rx="12" fill="#ffffff" stroke="#e3e2dd"/>
+    <text x="145" y="527" text-anchor="middle">Farcaster</text>
+    <rect x="250" y="490" width="170" height="60" rx="12" fill="#ffffff" stroke="#e3e2dd"/>
+    <text x="335" y="527" text-anchor="middle">Firefly</text>
+
+    <rect x="1130" y="490" width="130" height="60" rx="12" fill="#ffffff" stroke="#e3e2dd"/>
+    <text x="1195" y="527" text-anchor="middle">Quorum</text>
+    <rect x="1270" y="490" width="130" height="60" rx="12" fill="#ffffff" stroke="#e3e2dd"/>
+    <text x="1335" y="527" text-anchor="middle">Quilcast</text>
+    <rect x="1410" y="490" width="130" height="60" rx="12" fill="#ffffff" stroke="#e3e2dd"/>
+    <text x="1475" y="527" text-anchor="middle">Vibecaster</text>
+  </g>
+  <!-- client -> network writes -->
+  <g stroke="#6b6b66" stroke-width="2" marker-end="url(#arrow)">
+    <line x1="145" y1="488" x2="170" y2="405"/>
+    <line x1="335" y1="488" x2="300" y2="405"/>
+    <line x1="1195" y1="488" x2="1210" y2="405"/>
+    <line x1="1335" y1="488" x2="1340" y2="405"/>
+    <line x1="1475" y1="488" x2="1465" y2="405"/>
+  </g>
+    
+  <!-- snapdiff -->
+  <g>
+    <rect x="360" y="640" width="880" height="300" rx="22" fill="#1c1c1a"/>
+    <text x="800" y="690" font-size="30" font-weight="700" text-anchor="middle" fill="#ecebe6">snapdiff</text>
+    <text x="800" y="716" font-size="15" text-anchor="middle" fill="#9c9b95">snapdiff.schmidtiest.xyz, open source, MIT</text>
+    <g font-size="15" fill="#ecebe6">
+      <text x="400" y="762" font-weight="600">Every 15 min</text>
+      <text x="400" y="786">asks every node for the same casts by FID and records which nodes have each one</text>
+      <text x="400" y="822" font-weight="600">Every 60 s</text>
+      <text x="400" y="846">polls each node's health (shard heights, block delay) and each client's own status URL</text>
+      <text x="400" y="882" font-weight="600">Then it says</text>
+      <text x="400" y="906">scope: one node behind its peers, or the networks disagree. cause: sync lag, relay filtered, version rule, unexplained</text>
+    </g>
+  </g>
+
+  <!-- read arrows from snapdiff up -->
+  <g stroke="#2f7d4f" stroke-width="2.5" fill="none" marker-end="url(#arrow-read)">
+    <path d="M 560 640 C 540 560, 560 480, 560 405"/>
+    <path d="M 1040 640 C 1060 560, 1040 480, 1040 405"/>
+    <path d="M 440 640 C 420 610, 380 580, 345 552"/>
+    <path d="M 1160 640 C 1200 610, 1280 580, 1320 552"/>
+  </g>
+  <text x="575" y="470" font-size="13" fill="#2f7d4f">every node</text>
+  <text x="1055" y="470" font-size="13" fill="#2f7d4f">every node</text>
+  <text x="330" y="600" font-size="13" fill="#2f7d4f">status URL, if published</text>
+  <text x="1150" y="600" font-size="13" fill="#2f7d4f">status URL, if published</text>
+  <rect x="700" y="585" width="200" height="32" rx="8" fill="#ffffff" stroke="#2f7d4f"/>
+  <text x="800" y="607" font-size="15" font-weight="600" text-anchor="middle" fill="#2f7d4f">reads only, 1 request/min</text>
+
+  <!-- Legend -->
+  <g font-size="14" fill="#6b6b66">
+    <line x1="60" y1="960" x2="110" y2="960" stroke="#2f7d4f" stroke-width="2.5"/>
+    <text x="120" y="965">snapdiff reading (never writes)</text>
+    <line x1="400" y1="960" x2="450" y2="960" stroke="#6b6b66" stroke-width="2"/>
+    <text x="460" y="965">client writing casts to its network</text>
+    <line x1="760" y1="960" x2="810" y2="960" stroke="#6b6b66" stroke-width="2.5" stroke-dasharray="10 8"/>
+    <text x="820" y="965">relay (planned)</text>
+    <text x="1540" y="965" text-anchor="end">github.com/schmrdty/snapdiff</text>
+  </g>
+</svg>

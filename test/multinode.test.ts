@@ -18,7 +18,7 @@ const fakeHub = (casts: Record<number, HubMessage[]> | ((fid: number) => HubMess
     knowsFid: async () => true,
   }) as unknown as HubClient;
 
-const infoFor = (side: string): InfoSnapshot => ({ side, at: 1, reachable: true, maxBlockDelay: 1, numShards: 2, numFidRegistrations: 10, shards: [], error: null });
+const infoFor = (side: string): InfoSnapshot => ({ side, at: 1, reachable: true, provider: null, note: null, maxBlockDelay: 1, numShards: 2, numFidRegistrations: 10, shards: [], error: null });
 
 test("loadNodes: NODES list with per-label env, networks inferred or explicit, validation", () => {
   const env = {
@@ -52,6 +52,19 @@ test("loadNodes: without NODES the original two-node variables still work, netwo
   assert.equal(reference, "snapchain");
 });
 
+test("loadNodes: fallback providers come from _URL_2, _URL_3 in order; a gap ends the list", () => {
+  const { nodes } = loadNodes({
+    NODE_A_URL: "https://paid.example",
+    NODE_A_HEADERS: '{"x-api-key":"k"}',
+    NODE_A_URL_2: "https://snap.farcaster.xyz:3381/",
+    NODE_A_URL_4: "https://ignored.example",
+    NODE_B_URL: "https://hs.example",
+  });
+  assert.deepEqual(nodes[0]?.providers, [{ url: "https://paid.example", headers: { "x-api-key": "k" } }, { url: "https://snap.farcaster.xyz:3381", headers: {} }]);
+  assert.equal(nodes[0]?.url, "https://paid.example", "url stays the primary");
+  assert.equal(nodes[1]?.providers.length, 1);
+});
+
 test("scopeOf: a same-network peer with the cast makes it a node problem; otherwise the network's", () => {
   const net = (l: string) => (l === "sc" ? "snapchain" : "hypersnap");
   assert.equal(scopeOf("h1", ["sc", "h2"], net), "node");
@@ -64,9 +77,9 @@ test("scan with three nodes on two networks: presence picture, scope per row, a 
   const cfg = {
     ...loadConfig(),
     nodes: [
-      { label: "ref", url: "http://ref.test", network: "snapchain", headers: {} },
-      { label: "x", url: "http://x.test", network: "hypersnap", headers: {} },
-      { label: "y", url: "http://y.test", network: "hypersnap", headers: {} },
+      { label: "ref", url: "http://ref.test", network: "snapchain", headers: {}, providers: [{ url: "http://ref.test", headers: {} }] },
+      { label: "x", url: "http://x.test", network: "hypersnap", headers: {}, providers: [{ url: "http://x.test", headers: {} }] },
+      { label: "y", url: "http://y.test", network: "hypersnap", headers: {}, providers: [{ url: "http://y.test", headers: {} }] },
     ],
     reference: "ref",
     watchFids: [1, 2],
