@@ -1,0 +1,32 @@
+import { FEEDBACK_MAX } from './feedback.ts';
+export type Input = { text?: string; privateChat: boolean; mentioned: boolean; replyToBot: boolean; invitedThread: boolean };
+export type Trigger = { command: string; fid?: number; client?: string; stop?: boolean; feedback?: string; help?: boolean } | null;
+export const COMMANDS = ['snapdiff', 'status', 'fid', 'feedback', 'tip', 'help', 'start'] as const;
+const clientOf = (text: string) => text.match(/\bis\s+([\w .-]{1,40}?)\s+down\b/i)?.[1]?.trim();
+export function match(input: Input): Trigger {
+  const raw = (input.text ?? '').trim();
+  // Slash commands work wherever Telegram delivers them. A blank or "help" argument
+  // returns usage instead of silence, so a wrong command still gets an answer.
+  const cmd = raw.match(/^\/(snapdiff|status|fid|feedback|tip|help|start)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  if (cmd) {
+    const name = cmd[1]!.toLowerCase();
+    const arg = (cmd[2] ?? '').trim();
+    if (name === 'help' || name === 'start') return { command: 'help', help: true };
+    if (/^help$/i.test(arg)) return { command: name, help: true };
+    if (name === 'feedback') return arg ? { command: 'feedback', feedback: arg.slice(0, FEEDBACK_MAX) } : { command: 'feedback', help: true };
+    if (name === 'fid') return /^[1-9]\d{0,14}$/.test(arg) && Number.isSafeInteger(Number(arg)) ? { command: 'fid', fid: Number(arg) } : { command: 'fid', help: true };
+    if (name === 'tip') return { command: 'tip' };
+    return { command: name, client: clientOf(arg) };
+  }
+  // Plain text only when addressed: private chat, mention, reply to the bot, or an invited topic.
+  const invited = input.privateChat || input.mentioned || input.replyToBot || input.invitedThread;
+  if (!invited) return null;
+  const fb = raw.match(/^feedback:\s*([\s\S]+)/i);
+  if (fb) return { command: 'feedback', feedback: fb[1]!.trim().slice(0, FEEDBACK_MAX) };
+  const text = raw.slice(0, 500);
+  if (/^stop[.!]?$/i.test(text)) return { command: 'stop', stop: true };
+  if (/^help$/i.test(text)) return { command: 'help', help: true };
+  const symptom = /\b(cast not showing|missing cast|can't see my cast|is\s+.{1,40}?\s+down)\b/i.test(text);
+  if (!/\bsnapdiff\b/i.test(text) && !symptom && !input.mentioned) return null;
+  return { command: 'mention', client: clientOf(text) };
+}

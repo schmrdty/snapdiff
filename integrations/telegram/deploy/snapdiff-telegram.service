@@ -1,0 +1,19 @@
+[Unit]
+Description=Snapdiff Telegram read-only status bot
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=snapdiff-bot
+WorkingDirectory=/opt/snapdiff-telegram
+EnvironmentFile=/etc/snapdiff-telegram.env
+ExecStart=/usr/bin/node src/telegram.ts
+Restart=on-failure
+RestartSec=5
+StateDirectory=snapdiff-telegram
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+[Install]
+WantedBy=multi-user.target
