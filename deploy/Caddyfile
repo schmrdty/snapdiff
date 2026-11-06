@@ -28,7 +28,7 @@ snapdiff.schmidtiest.xyz {
 
 	# To gate the whole site behind a password later: uncomment this block,
 	# generate the hash on the VPS with `caddy hash-password`, paste it in,
-	# then `sudo systemctl reload caddy`.
+	# then `sudo systemctl restart caddy` (reload needs the admin API, which is off).
 	# basic_auth {
 	# 	viewer <hash-from-caddy-hash-password>
 	# }
