@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { CLIENT_STATUSES, type ClientHealth, type ClientStatus } from "./clients.js";
 import { networks, nodeOf, type Config } from "./config.js";
+import { hostOf } from "./hub.js";
+import { llmsTxt } from "./llms.js";
 import type { Store } from "./store/store.js";
 import { CAUSES, type Cause, type DiffRow, type InfoSnapshot, type Side, type StallRow } from "./types.js";
 
@@ -71,6 +73,15 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     return c.json(await store.listStalls({ limit }));
   });
 
+  // Plain-text description for agents (src/llms.ts). Origin from the proxy headers when
+  // behind Caddy, else from the request, so the links are absolute and correct in both setups.
+  app.get("/llms.txt", (c) => {
+    const url = new URL(c.req.url);
+    const proto = c.req.header("x-forwarded-proto") ?? url.protocol.replace(":", "");
+    const host = c.req.header("x-forwarded-host") ?? c.req.header("host") ?? url.host;
+    return c.text(llmsTxt(cfg, `${proto}://${host}`), 200, { "content-type": "text/plain; charset=utf-8" });
+  });
+
   app.get("/", async (c) => {
     const now = Date.now();
     const [summary, infos, unexplained, pending, stalls] = await Promise.all([
@@ -82,7 +93,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     ]);
     const openStall = (side: Side, shardId: number) => stalls.some((s) => s.side === side && s.shardId === shardId && s.endedAt === null);
 
-    const nodeCard = (side: Side, i: InfoSnapshot | null) => {
+    const nodeCard = (side: Side, i: InfoSnapshot | null, extra: boolean) => {
       const status = i === null ? "no data" : i.reachable ? "up" : "down";
       const cls = i?.reachable ? "ok" : "bad";
       const shards =
@@ -94,13 +105,21 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
               `<tr><td>${s.shardId}${openStall(side, s.shardId) ? ` <span class="pill bad">stalled</span>` : ""}</td><td>${s.maxHeight.toLocaleString()}</td><td>${s.blockDelay}</td></tr>`,
           )
           .join("") ?? "";
-      return `<section class="card">
+      return `<section class="card"${extra ? " data-extra" : " data-pin"}>
         <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span>${side === cfg.reference ? ` <span class="pill muted">reference</span>` : ""}</h2>
-        <p class="muted">${esc(nodeOf(cfg, side)?.url ?? "")} · checked ${ago(i?.at ?? null, now)}</p>
-        ${i?.error ? `<p class="bad-text">${esc(i.error)}</p>` : ""}
+        <p class="muted">${esc(i?.provider ?? hostOf(nodeOf(cfg, side)?.url ?? ""))}${(nodeOf(cfg, side)?.providers.length ?? 1) > 1 ? ` (${nodeOf(cfg, side)?.providers.length} providers)` : ""} · checked ${ago(i?.at ?? null, now)}</p>
+        ${i?.note ? `<p class="warn">${esc(i.note)}</p>` : ""}
+        ${i?.error ? `<p class="bad-text">Not answering: ${esc(i.error)}. Other nodes still are; nothing is lost, this one just cannot be compared until it is back.</p>` : ""}
         ${shards ? `<table><thead><tr><th>Shard</th><th>Height</th><th>Block delay</th></tr></thead><tbody>${shards}</tbody></table>` : ""}
       </section>`;
     };
+
+    // Node cards: the first configured node of every network is pinned on the left
+    // (with two networks that is the reference and its first peer); any further
+    // nodes share the remaining slots and page with the arrows. Pure presentation.
+    const pinnedLabels = nets.map((n) => n.labels[0]).filter((l): l is Side => l !== undefined);
+    const extraLabels = nodeLabels.filter((l) => !pinnedLabels.includes(l));
+    const extraSet = new Set(extraLabels);
 
     const counts = (["unexplained", "pending", "relay_filtered", "version_rule", "sync_lag"] as const)
       .map(
@@ -211,11 +230,36 @@ main{max-width:1100px;margin:0 auto;padding:20px 16px}h1{font-size:20px;margin:0
 table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 th{font-weight:600;color:var(--muted)}.mono{font-family:ui-monospace,monospace}.scroll{overflow:auto;max-height:420px}
 td.text{white-space:normal;min-width:240px;max-width:460px}
+.nodes{grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-top:8px}[hidden]{display:none!important}
+.pager{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:16px 0 0}.pager .muted{margin:0}
+.pager button{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:2px 10px;font:inherit;cursor:pointer}
+.pager button:disabled{opacity:.4;cursor:default}
 </style></head><body><main>
 <h1>snapdiff: ${nets.map(({ network, labels }) => `${esc(network)} (${labels.length} node${labels.length === 1 ? "" : "s"})`).join(" vs ")}</h1>
 <p class="muted">Scans run every ${Math.round(cfg.scanIntervalMs / 60000)} min: ${summary.scans} so far, last ${ago(summary.lastScanAt, now)}, next in about ${nextScanIn(summary.lastScanAt, cfg.scanIntervalMs, now)}. This page reloads every 30 s. Read-only.</p>
 <div class="stats">${counts}</div>
-<div class="grid">${nodeLabels.map((l) => nodeCard(l, infos[l] ?? null)).join("")}</div>
+${extraLabels.length > 0 ? `<div class="pager" id="pager" hidden><span class="muted">More ${esc(nets.find((n) => n.labels.length > 1)?.network ?? "")} nodes</span><button type="button" id="prev" aria-label="Earlier nodes">&larr;</button><span id="pagei" class="muted"></span><button type="button" id="next" aria-label="Later nodes">&rarr;</button></div>` : ""}
+<div class="grid nodes" id="nodes">${[...pinnedLabels, ...extraLabels].map((l) => nodeCard(l, infos[l] ?? null, extraSet.has(l))).join("")}</div>
+<script>
+(function(){
+  var g=document.getElementById('nodes'),pager=document.getElementById('pager');if(!g||!pager)return;
+  var extra=[].slice.call(g.querySelectorAll('[data-extra]')),pinned=g.querySelectorAll('[data-pin]').length;
+  var prev=document.getElementById('prev'),next=document.getElementById('next'),lab=document.getElementById('pagei');
+  var key='snapdiff.nodeOffset',off=0;try{off=parseInt(localStorage.getItem(key)||'0',10)||0}catch(e){}
+  function perRow(){return Math.max(1,Math.floor((g.clientWidth+12)/262));}
+  function render(){
+    var slots=Math.max(1,perRow()-pinned);
+    if(extra.length<=slots){extra.forEach(function(c){c.hidden=false});pager.hidden=true;return;}
+    off=Math.min(Math.max(off,0),extra.length-slots);
+    extra.forEach(function(c,i){c.hidden=i<off||i>=off+slots});
+    pager.hidden=false;prev.disabled=off===0;next.disabled=off+slots>=extra.length;
+    lab.textContent=(off+1)+'-'+(off+slots)+' of '+extra.length;
+    try{localStorage.setItem(key,String(off))}catch(e){}
+  }
+  prev.onclick=function(){off--;render()};next.onclick=function(){off++;render()};
+  addEventListener('resize',render);render();
+})();
+</script>
 ${splitHtml()}
 ${clientsHtml(clients?.() ?? [])}
 <section class="card" style="margin-bottom:12px"><h2>Shard stalls${summary.openStalls > 0 ? ` <span class="pill bad">${summary.openStalls} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}</h2>

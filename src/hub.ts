@@ -1,3 +1,4 @@
+import type { Provider } from "./config.js";
 import type { HubMessage, InfoSnapshot, ShardInfo, Side } from "./types.js";
 
 /** Farcaster epoch: 2021-01-01T00:00:00Z, in unix seconds. */
@@ -13,6 +14,27 @@ export class HubError extends Error {
     super(message);
   }
 }
+
+/** Statuses that mean "this provider will keep refusing us", so the next provider should answer. */
+const BENCH_STATUSES: ReadonlySet<number> = new Set([401, 402, 403, 429]);
+
+/** Short, honest, no account details. The status code stays so an operator can look it up. */
+export function explainStatus(status: number | null, timeoutMs: number): string {
+  if (status === 402) return "out of credits: the hosted provider wants to be paid before it answers (HTTP 402)";
+  if (status === 401 || status === 403) return `the provider turned our key away (HTTP ${status})`;
+  if (status === 429) return "the provider asked us to slow down (HTTP 429)";
+  if (status !== null && status >= 500) return `the provider is having a bad day (HTTP ${status})`;
+  if (status !== null) return `unexpected answer (HTTP ${status})`;
+  return `no answer within ${Math.round(timeoutMs / 1000)}s`;
+}
+
+export const hostOf = (url: string): string => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
 
 /**
  * Whether an error response means "definitely absent" rather than "something went wrong".
@@ -50,24 +72,62 @@ export const FID_HASH_ROUTED_TYPES: ReadonlySet<string> = new Set([
  * Hypersnap is a Snapchain fork and is assumed to serve the same endpoints.
  * Run `npm run check-nodes` to confirm before trusting results.
  */
+export interface HubOptions {
+  /** How long a benched provider stays benched before it is tried again. */
+  providerRetryMs?: number;
+  fetchImpl?: typeof fetch;
+  now?: () => number;
+}
+
 export class HubClient {
+  readonly providers: ReadonlyArray<Provider>;
+  private readonly providerRetryMs: number;
+  private readonly fetchImpl: typeof fetch;
+  private readonly now: () => number;
+  /** Index of the provider that answered last. */
+  private active = 0;
+  /** Provider index -> time until which it is benched, with the reason. */
+  private readonly benched = new Map<number, { until: number; why: string }>();
+
   constructor(
     readonly side: Side,
-    readonly baseUrl: string,
+    providers: ReadonlyArray<Provider> | string,
     private readonly timeoutMs: number,
-    private readonly headers: Record<string, string> = {},
-  ) {}
+    opts: HubOptions = {},
+  ) {
+    this.providers = typeof providers === "string" ? [{ url: providers, headers: {} }] : providers;
+    if (this.providers.length === 0) throw new Error(`node "${side}" has no providers`);
+    this.providerRetryMs = opts.providerRetryMs ?? 10 * 60_000;
+    this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.now = opts.now ?? Date.now;
+  }
 
-  private async get(path: string): Promise<{ status: number; body: unknown }> {
+  /** Primary provider's URL; what the config says, not necessarily who is answering. */
+  get baseUrl(): string {
+    return this.providers[0]!.url;
+  }
+
+  /** URL of the provider that answered most recently. */
+  get activeUrl(): string {
+    return this.providers[this.active]!.url;
+  }
+
+  /** Why the primary is not answering, when a fallback is. Null when the primary is fine. */
+  primaryNote(): string | null {
+    const b = this.benched.get(0);
+    if (b === undefined || this.active === 0) return null;
+    return `${hostOf(this.baseUrl)}: ${b.why}; answering via ${hostOf(this.activeUrl)}`;
+  }
+
+  private async fetchOnce(p: Provider, path: string): Promise<{ status: number; body: unknown }> {
     // Some hosted nodes (Neynar) return 403 to Node's default User-Agent. Always identify.
-    const headers = { "user-agent": "snapdiff/0.4 (+read-only comparator)", ...this.headers };
-    let res = await fetch(`${this.baseUrl}${path}`, { headers, signal: AbortSignal.timeout(this.timeoutMs) });
-    // Hosted nodes rate-limit. Back off briefly before giving up; a 429 that persists is an
-    // error for this request, which the scan then skips without creating a diff.
+    const headers = { "user-agent": "snapdiff/0.5 (+read-only comparator)", ...p.headers };
+    let res = await this.fetchImpl(`${p.url}${path}`, { headers, signal: AbortSignal.timeout(this.timeoutMs) });
+    // Hosted nodes rate-limit. Back off briefly before giving up.
     for (const waitMs of [1000, 3000]) {
       if (res.status !== 429) break;
       await new Promise((r) => setTimeout(r, waitMs));
-      res = await fetch(`${this.baseUrl}${path}`, { headers, signal: AbortSignal.timeout(this.timeoutMs) });
+      res = await this.fetchImpl(`${p.url}${path}`, { headers, signal: AbortSignal.timeout(this.timeoutMs) });
     }
     const text = await res.text();
     let body: unknown = null;
@@ -79,12 +139,48 @@ export class HubClient {
     return { status: res.status, body };
   }
 
+  /**
+   * Try the active provider, then the others in order. A provider that refuses us (401, 402,
+   * 403, 429 after backoff) or does not answer is benched for providerRetryMs; a benched
+   * provider is skipped until then, so one dead key does not slow every request. A 4xx/5xx
+   * that is not a refusal (not found, bad request) is a normal answer and is returned as-is.
+   */
+  private async get(path: string): Promise<{ status: number; body: unknown }> {
+    const now = this.now();
+    const order = [this.active, ...this.providers.map((_, i) => i).filter((i) => i !== this.active)];
+    let lastError: HubError | null = null;
+    for (const i of order) {
+      const bench = this.benched.get(i);
+      if (bench !== undefined && now < bench.until) continue;
+      const p = this.providers[i]!;
+      try {
+        const r = await this.fetchOnce(p, path);
+        if (BENCH_STATUSES.has(r.status)) {
+          const why = explainStatus(r.status, this.timeoutMs);
+          this.benched.set(i, { until: now + this.providerRetryMs, why });
+          lastError = new HubError(`${hostOf(p.url)}: ${why}`, r.status);
+          continue;
+        }
+        this.benched.delete(i);
+        this.active = i;
+        return r;
+      } catch (e) {
+        const why = e instanceof HubError ? e.message : explainStatus(null, this.timeoutMs);
+        this.benched.set(i, { until: now + this.providerRetryMs, why });
+        lastError = new HubError(`${hostOf(p.url)}: ${why}`, null);
+      }
+    }
+    // Everyone is benched. Report the primary's reason; it is the one the operator configured.
+    const primary = this.benched.get(0);
+    throw lastError ?? new HubError(primary ? `${hostOf(this.baseUrl)}: ${primary.why}` : "no provider answered", null);
+  }
+
   async info(): Promise<InfoSnapshot> {
     const at = Date.now();
     try {
       const { status, body } = await this.get("/v1/info");
       if (status !== 200 || typeof body !== "object" || body === null) {
-        throw new HubError(`/v1/info returned HTTP ${status}`, status);
+        throw new HubError(`${hostOf(this.activeUrl)}: ${explainStatus(status, this.timeoutMs)}`, status);
       }
       const b = body as {
         dbStats?: { numFidRegistrations?: number };
@@ -102,6 +198,8 @@ export class HubClient {
         side: this.side,
         at,
         reachable: true,
+        provider: hostOf(this.activeUrl),
+        note: this.primaryNote(),
         maxBlockDelay: delays.length > 0 ? Math.max(...delays) : null,
         numShards: typeof b.numShards === "number" && b.numShards > 0 ? b.numShards : null,
         numFidRegistrations: b.dbStats?.numFidRegistrations ?? null,
@@ -113,6 +211,8 @@ export class HubClient {
         side: this.side,
         at,
         reachable: false,
+        provider: null,
+        note: null,
         maxBlockDelay: null,
         numShards: null,
         numFidRegistrations: null,

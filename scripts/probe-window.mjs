@@ -11,7 +11,7 @@ import { HubClient } from "../dist/src/hub.js";
 const cfg = loadConfig();
 const fids = process.argv.slice(2).map(Number).filter((n) => Number.isInteger(n) && n > 0);
 if (!fids.length) { console.error("usage: probe-window.mjs <fid> [fid...]"); process.exit(1); }
-const hubs = cfg.nodes.map((n) => [n.label, new HubClient(n.label, n.url, cfg.requestTimeoutMs, n.headers)]);
+const hubs = cfg.nodes.map((n) => [n.label, new HubClient(n.label, n.providers, cfg.requestTimeoutMs)]);
 const nowSec = Math.floor(Date.now() / 1000);
 const windows = {
   "scan 24h": [nowSec - cfg.lookbackHours * 3600, nowSec - cfg.graceSeconds],
