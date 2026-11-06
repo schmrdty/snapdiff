@@ -90,6 +90,7 @@ Sizing: each scan fetches every watched FID on both nodes (one request per 100 c
 | Restart | `ssh snapdiff 'sudo systemctl restart snapdiff'` |
 | Daily report + hash (UTC yesterday) | `ssh snapdiff 'cd /srv/snapdiff && sudo -u snapdiff node --disable-warning=ExperimentalWarning dist/src/report.js'` |
 | Pull the database for local analysis | `rsync -az snapdiff:/srv/snapdiff/data/snapdiff.db ./data/vps-snapdiff.db` |
+| Dashboard pager script blocked (all node cards show, no arrows) | the CSP in `/etc/caddy/Caddyfile` must carry the script hash from `deploy/Caddyfile` (`test/csp.test.ts` prints it); copy the file over and `sudo systemctl reload caddy` |
 | Password-gate the dashboard | uncomment `basic_auth` in `/etc/caddy/Caddyfile` on the VPS, paste a `caddy hash-password` hash, `sudo systemctl reload caddy` |
 
 ## Security notes
