@@ -19,6 +19,12 @@ export interface NodeConfig {
    * credits or rate-limits is benched and the next provider answers; same network, same data.
    */
   providers: Provider[];
+  /**
+   * Hide where the node lives. The dashboard, the API, notes, and error texts name a private
+   * node by its label only, never by host or URL, so an operator who runs a node on a bare IP
+   * can be listed without publishing that IP. Absent means public (hosts shown as before).
+   */
+  private?: boolean;
 }
 
 const headersFrom = (name: string): Record<string, string> => {
@@ -106,8 +112,10 @@ export const parseFidList = (text: string): number[] =>
     .map(Number)
     .filter((n) => Number.isInteger(n) && n > 0);
 
-const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,23}$/;
-/** "ohsnap" -> NODE_OHSNAP_URL; "open-caster" -> NODE_OPEN_CASTER_URL. */
+/** Labels may contain dots so a private node can be named like a host ("hypersnape.node"). */
+const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9.-]{0,23}$/;
+const NETWORK_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,23}$/;
+/** "ohsnap" -> NODE_OHSNAP_URL; "open-caster" -> NODE_OPEN_CASTER_URL; "hypersnape.node" -> NODE_HYPERSNAPE_NODE_URL. */
 export const envKeyFor = (label: string): string => label.toUpperCase().replace(/[^A-Z0-9]/g, "_");
 
 /** A label that names its network needs no NODE_<LABEL>_NETWORK. */
@@ -142,6 +150,8 @@ export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeCo
       else process.env[name] = saved;
     }
   };
+  // NODE_<K>_PRIVATE=1 (or true/yes) hides the node's host everywhere snapdiff speaks.
+  const flag = (name: string): boolean => ["1", "true", "yes"].includes(read(name, "").trim().toLowerCase());
   const listed = read("NODES", "")
     .split(",")
     .map((s) => s.trim())
@@ -158,7 +168,7 @@ export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeCo
   };
   const withProviders = (label: string, network: string, prefix: string, primaryUrl: string): NodeConfig => {
     const providers = providersFor(prefix, { url: primaryUrl.replace(/\/$/, ""), headers: headers(`${prefix}_HEADERS`) });
-    return { label, url: providers[0]!.url, network, headers: providers[0]!.headers, providers };
+    return { label, url: providers[0]!.url, network, headers: providers[0]!.headers, providers, ...(flag(`${prefix}_PRIVATE`) ? { private: true } : {}) };
   };
   const legacy = (slot: "A" | "B", label: string, url: string, network: string): NodeConfig => {
     const l = read(`NODE_${slot}_LABEL`, label);
@@ -178,8 +188,8 @@ export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeCo
   if (nodes.length < 2) throw new Error("at least two nodes are required");
   const seen = new Set<string>();
   for (const n of nodes) {
-    if (!LABEL_RE.test(n.label)) throw new Error(`node label "${n.label}" must be 1 to 24 letters, digits, or dashes`);
-    if (!LABEL_RE.test(n.network)) throw new Error(`network "${n.network}" for node "${n.label}" must be 1 to 24 letters, digits, or dashes`);
+    if (!LABEL_RE.test(n.label)) throw new Error(`node label "${n.label}" must be 1 to 24 letters, digits, dashes, or dots, starting with a letter or digit`);
+    if (!NETWORK_RE.test(n.network)) throw new Error(`network "${n.network}" for node "${n.label}" must be 1 to 24 letters, digits, or dashes`);
     if (seen.has(n.label)) throw new Error(`duplicate node label "${n.label}"`);
     seen.add(n.label);
   }

@@ -47,7 +47,7 @@ Expected today, before the fork: zero diffs and zero stalls, because both nodes 
 
 Run each node on its own machine (both default to ports 3381-3383, and a Snapchain node needs about 2 TB of disk), then point `NODE_A_URL` and `NODE_B_URL` at them. Everything else is the same as above.
 
-To compare three or more nodes, list them in `NODES` and give each its own `NODE_<LABEL>_URL`, `NODE_<LABEL>_NETWORK` (`snapchain` or `hypersnap`), and `NODE_<LABEL>_HEADERS` when a key is needed. The labels become the node ids in the database, the dashboard, and the API; the network tag is what lets snapdiff tell "one Hypersnap node is behind" from "Hypersnap and Snapchain disagree". Example and migration notes in `docs/MULTI-NODE.md`.
+To compare three or more nodes, list them in `NODES` and give each its own `NODE_<LABEL>_URL`, `NODE_<LABEL>_NETWORK` (`snapchain` or `hypersnap`), and `NODE_<LABEL>_HEADERS` when a key is needed. The labels become the node ids in the database, the dashboard, and the API; the network tag is what lets snapdiff tell "one Hypersnap node is behind" from "Hypersnap and Snapchain disagree". Add `NODE_<LABEL>_PRIVATE=1` for a node whose address should not be published (a bare IP, for example): the page, the API, and every note then name it by label only, and labels may contain dots so such a node can be called `hypersnape.node`. Example and migration notes in `docs/MULTI-NODE.md`.
 
 ## How it works
 
