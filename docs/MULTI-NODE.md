@@ -38,7 +38,8 @@ NODE_OHSNAP_URL=https://ohsnap.schmidtiest.xyz
 NODE_OHSNAP_NETWORK=hypersnap
 ```
 
-- A label is 1 to 24 characters: letters, digits, dashes; it must start with a letter or digit. The env key is the label upper-cased with dashes turned into underscores (`my-node` reads `NODE_MY_NODE_URL`).
+- A label is 1 to 24 characters: letters, digits, dashes, dots; it must start with a letter or digit. The env key is the label upper-cased with dashes and dots turned into underscores (`my-node` reads `NODE_MY_NODE_URL`, `hypersnape.node` reads `NODE_HYPERSNAPE_NODE_URL`).
+- `NODE_<LABEL>_PRIVATE=1` hides where the node lives. The dashboard card, `/api/summary` (`info[label].provider`, `note`, `error`), `info_snapshots.provider`, and the startup log name the node by its label (a fallback as `label (provider 2)`) and never by host or URL. Use it for an operator who runs a node on a bare IP and does not want that IP on a public page; the URL still has to be in the env on the snapdiff host.
 - `NODE_<LABEL>_NETWORK` is required unless the label itself contains `snapchain` or `hypersnap`. Network names follow the label rules.
 - `REFERENCE_NODE` defaults to the first label. It only anchors `presentOn` and the dashboard.
 - `NODE_<LABEL>_HEADERS` is optional JSON. Same quoting rules as before: load the env with `node --env-file`, never by sourcing it.
@@ -78,3 +79,5 @@ So keep the original two nodes as the first two entries of `NODES`, in the same 
 ## Watching your own node
 
 A node behind a residential connection should not be exposed directly. The pattern used for `ohsnap.schmidtiest.xyz`: the node runs at home, a small VPS terminates TLS and forwards 3381 (HTTP API) over WireGuard to it, and snapdiff talks to the VPS hostname like any other node. The home IP never appears in snapdiff's config or its page.
+
+A node that is only reachable by IP (no hostname) can still be listed without publishing the IP: give it a label of your choosing and set `NODE_<LABEL>_PRIVATE=1`. The label is the only name snapdiff ever prints for it. The naming used on snapdiff.schmidtiest.xyz for such nodes is `{hyper|snap}{short made-up name}.node`, for example `hypersnape.node`, agreed with the operator in private.

@@ -75,6 +75,12 @@ export const FID_HASH_ROUTED_TYPES: ReadonlySet<string> = new Set([
 export interface HubOptions {
   /** How long a benched provider stays benched before it is tried again. */
   providerRetryMs?: number;
+  /**
+   * Set for a private node: snapshots, notes, and error texts then name providers by this
+   * (the label, plus "(provider N)" for a fallback) instead of by host, so the host never
+   * reaches the dashboard, the API, or the database.
+   */
+  displayName?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -82,6 +88,7 @@ export interface HubOptions {
 export class HubClient {
   readonly providers: ReadonlyArray<Provider>;
   private readonly providerRetryMs: number;
+  private readonly displayName: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   /** Index of the provider that answered last. */
@@ -98,6 +105,7 @@ export class HubClient {
     this.providers = typeof providers === "string" ? [{ url: providers, headers: {} }] : providers;
     if (this.providers.length === 0) throw new Error(`node "${side}" has no providers`);
     this.providerRetryMs = opts.providerRetryMs ?? 10 * 60_000;
+    this.displayName = opts.displayName;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.now = opts.now ?? Date.now;
   }
@@ -112,11 +120,17 @@ export class HubClient {
     return this.providers[this.active]!.url;
   }
 
+  /** How provider i is named in anything that leaves this class: its host, or the private node's label. */
+  private nameOf(i: number): string {
+    if (this.displayName === undefined) return hostOf(this.providers[i]!.url);
+    return i === 0 ? this.displayName : `${this.displayName} (provider ${i + 1})`;
+  }
+
   /** Why the primary is not answering, when a fallback is. Null when the primary is fine. */
   primaryNote(): string | null {
     const b = this.benched.get(0);
     if (b === undefined || this.active === 0) return null;
-    return `${hostOf(this.baseUrl)}: ${b.why}; answering via ${hostOf(this.activeUrl)}`;
+    return `${this.nameOf(0)}: ${b.why}; answering via ${this.nameOf(this.active)}`;
   }
 
   private async fetchOnce(p: Provider, path: string): Promise<{ status: number; body: unknown }> {
@@ -158,7 +172,7 @@ export class HubClient {
         if (BENCH_STATUSES.has(r.status)) {
           const why = explainStatus(r.status, this.timeoutMs);
           this.benched.set(i, { until: now + this.providerRetryMs, why });
-          lastError = new HubError(`${hostOf(p.url)}: ${why}`, r.status);
+          lastError = new HubError(`${this.nameOf(i)}: ${why}`, r.status);
           continue;
         }
         this.benched.delete(i);
@@ -167,12 +181,12 @@ export class HubClient {
       } catch (e) {
         const why = e instanceof HubError ? e.message : explainStatus(null, this.timeoutMs);
         this.benched.set(i, { until: now + this.providerRetryMs, why });
-        lastError = new HubError(`${hostOf(p.url)}: ${why}`, null);
+        lastError = new HubError(`${this.nameOf(i)}: ${why}`, null);
       }
     }
     // Everyone is benched. Report the primary's reason; it is the one the operator configured.
     const primary = this.benched.get(0);
-    throw lastError ?? new HubError(primary ? `${hostOf(this.baseUrl)}: ${primary.why}` : "no provider answered", null);
+    throw lastError ?? new HubError(primary ? `${this.nameOf(0)}: ${primary.why}` : "no provider answered", null);
   }
 
   async info(): Promise<InfoSnapshot> {
@@ -180,7 +194,7 @@ export class HubClient {
     try {
       const { status, body } = await this.get("/v1/info");
       if (status !== 200 || typeof body !== "object" || body === null) {
-        throw new HubError(`${hostOf(this.activeUrl)}: ${explainStatus(status, this.timeoutMs)}`, status);
+        throw new HubError(`${this.nameOf(this.active)}: ${explainStatus(status, this.timeoutMs)}`, status);
       }
       const b = body as {
         dbStats?: { numFidRegistrations?: number };
@@ -198,7 +212,7 @@ export class HubClient {
         side: this.side,
         at,
         reachable: true,
-        provider: hostOf(this.activeUrl),
+        provider: this.nameOf(this.active),
         note: this.primaryNote(),
         maxBlockDelay: delays.length > 0 ? Math.max(...delays) : null,
         numShards: typeof b.numShards === "number" && b.numShards > 0 ? b.numShards : null,

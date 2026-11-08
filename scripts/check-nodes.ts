@@ -23,8 +23,8 @@ const check = async (name: string, fn: () => Promise<string>) => {
 };
 
 for (const node of cfg.nodes) {
-  const hub = new HubClient(node.label, node.providers, cfg.requestTimeoutMs, { providerRetryMs: cfg.providerRetryMs });
-  console.log(`\n${node.label} on ${node.network} (${node.providers.map((p) => p.url).join(" -> ")})${node.label === cfg.reference ? "  [reference]" : ""}`);
+  const hub = new HubClient(node.label, node.providers, cfg.requestTimeoutMs, { providerRetryMs: cfg.providerRetryMs, ...(node.private ? { displayName: node.label } : {}) });
+  console.log(`\n${node.label} on ${node.network} (${node.private ? "private" : node.providers.map((p) => p.url).join(" -> ")})${node.label === cfg.reference ? "  [reference]" : ""}`);
 
   let numShards: number | null = null;
   await check("/v1/info", async () => {

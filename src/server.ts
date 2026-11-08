@@ -107,7 +107,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
           .join("") ?? "";
       return `<section class="card"${extra ? " data-extra" : " data-pin"}>
         <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span>${side === cfg.reference ? ` <span class="pill muted">reference</span>` : ""}</h2>
-        <p class="muted">${esc(i?.provider ?? hostOf(nodeOf(cfg, side)?.url ?? ""))}${(nodeOf(cfg, side)?.providers.length ?? 1) > 1 ? ` (${nodeOf(cfg, side)?.providers.length} providers)` : ""} · checked ${ago(i?.at ?? null, now)}</p>
+        <p class="muted">${esc(i?.provider ?? (nodeOf(cfg, side)?.private ? side : hostOf(nodeOf(cfg, side)?.url ?? "")))}${(nodeOf(cfg, side)?.providers.length ?? 1) > 1 ? ` (${nodeOf(cfg, side)?.providers.length} providers)` : ""} · checked ${ago(i?.at ?? null, now)}</p>
         ${i?.note ? `<p class="warn">${esc(i.note)}</p>` : ""}
         ${i?.error ? `<p class="bad-text">Not answering: ${esc(i.error)}. Other nodes still are; nothing is lost, this one just cannot be compared until it is back.</p>` : ""}
         ${shards ? `<table><thead><tr><th>Shard</th><th>Height</th><th>Block delay</th></tr></thead><tbody>${shards}</tbody></table>` : ""}

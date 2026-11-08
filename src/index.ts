@@ -21,10 +21,10 @@ const deps: Deps = {
   cfg,
   store,
   log,
-  hubs: Object.fromEntries(cfg.nodes.map((n) => [n.label, new HubClient(n.label, n.providers, cfg.requestTimeoutMs, { providerRetryMs: cfg.providerRetryMs })])),
+  hubs: Object.fromEntries(cfg.nodes.map((n) => [n.label, new HubClient(n.label, n.providers, cfg.requestTimeoutMs, { providerRetryMs: cfg.providerRetryMs, ...(n.private ? { displayName: n.label } : {}) })])),
 };
 
-log(`snapdiff: reference ${cfg.reference}; nodes ${cfg.nodes.map((n) => `${n.label} [${n.network}] (${n.providers.map((p) => p.url).join(" -> ")})`).join(", ")}`);
+log(`snapdiff: reference ${cfg.reference}; nodes ${cfg.nodes.map((n) => `${n.label} [${n.network}] (${n.private ? "private" : n.providers.map((p) => p.url).join(" -> ")})`).join(", ")}`);
 log(`watchlist: ${cfg.watchFids.length} fids, +${cfg.sampleSize} random per scan, lookback ${cfg.lookbackHours}h`);
 
 // Info first so FID sampling has an upper bound before the first scan.
