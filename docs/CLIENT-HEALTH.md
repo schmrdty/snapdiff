@@ -15,7 +15,7 @@ The same rows are at `GET /api/clients`.
 This feature calls third-party servers and renders links. These rules keep that from becoming a problem for you or for your visitors.
 
 1. Every URL comes from your config file. Nothing in a response, a query string, or the page can change where the poller goes or where a link points. A health endpoint that returns a URL is ignored.
-2. HTTPS only, no credentials in URLs, redirects refused (a redirect counts as down with the note `redirect refused`), 5 second timeout, response body capped at 16 KB.
+2. HTTPS only, no credentials in URLs, redirects refused (a redirect counts as down with the note `redirect refused`), 5 second timeout, response body capped at 64 KB.
 3. The response is reduced to a status word from a fixed set plus a note built from fixed phrases and at most 40 characters of the status value. The raw body is never stored, logged, or rendered.
 4. Labels are 1 to 40 printable ASCII characters and are escaped on render like everything else. Status pills render only from the fixed vocabulary; an unexpected value shows as `unknown`.
 5. Links carry `rel="noopener noreferrer"`: the client's site cannot reach back into the visitor's tab, and your dashboard URL is not sent as the referrer.
@@ -45,7 +45,7 @@ How a check resolves:
 | 200 and the field is some other string or `false` | degraded | `status "<value>"` |
 | Any non-2xx | down | `HTTP <code>` |
 | Timeout, connection failure, or redirect | down | `timeout`, `unreachable`, `redirect refused` |
-| 200 but no JSON, no field, or body over 16 KB | unknown | `not JSON`, `no status field`, `body too large` |
+| 200 but no JSON, no field, or body over 64 KB | unknown | `not JSON`, `no status field`, `body too large` |
 
 ## Environment
 
@@ -66,7 +66,7 @@ How a check resolves:
 
    Expected: `clients: N configured, checked every 60s`. A config error prints the reason and the unit exits; fix the file and restart.
 
-3. Deploy the Caddyfile change once (the CSP header) with the normal runbook step 3, or copy it by hand: `scp deploy/Caddyfile snapdiff:/tmp/Caddyfile && ssh snapdiff 'sudo cp /tmp/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy'`.
+3. Deploy the Caddyfile change once (the CSP header) with the normal runbook step 3, or copy it by hand: `scp deploy/Caddyfile snapdiff:/tmp/Caddyfile && ssh snapdiff 'sudo cp /tmp/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy'` (restart, not reload: the Caddyfile sets `admin off`, and reload needs the admin API).
 
 Turning it off: remove or blank `CLIENT_HEALTH_FILE` and restart.
 

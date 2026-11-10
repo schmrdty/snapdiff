@@ -10,8 +10,15 @@ export const TELEGRAM_URL = "https://t.me/snapdiff_bot";
 export function llmsTxt(cfg: Config, origin: string): string {
   const nets = networks(cfg);
   const nodeLines = cfg.nodes.map((n) => {
-    const tags = n.label === cfg.reference ? " (reference: anchors presentOn and the dashboard)" : "";
-    return `- ${n.label}: network ${n.network}${tags}`;
+    const netRef = Object.entries(cfg.references).find(([, l]) => l === n.label)?.[0];
+    const tags =
+      n.label === cfg.reference
+        ? " (reference: anchors presentOn and the dashboard)"
+        : netRef === undefined
+          ? ""
+          : ` (${netRef} reference: presentOn when the reference lacks the cast)`;
+    const shown = n.name === undefined ? "" : ` (shown on the dashboard as "${n.name}")`;
+    return `- ${n.label}: network ${n.network}${tags}${shown}`;
   });
   const netLine = nets.map((n) => `${n.network} (${n.labels.length} node${n.labels.length === 1 ? "" : "s"})`).join(" vs ");
   return [
@@ -30,6 +37,7 @@ export function llmsTxt(cfg: Config, origin: string): string {
     `- [Summary](${origin}/api/summary): nodes (labels, in order), networks (network to labels), reference, counts by cause, by missing node, by scope, per-network disagreements (networkSplit), and the latest /v1/info per node (info[label])`,
     `- [Open diffs](${origin}/api/diffs?cause=unexplained&limit=200): diff rows with the full message JSON, shard, presentOn, missingOn, presentNodes, scope, and cause. Query: cause (sync_lag, relay_filtered, version_rule, pending, unexplained), limit (max 5000)`,
     `- [Shard stalls](${origin}/api/stalls?limit=200): stall events, newest first, each with the node, shard, stuck height, and the peer it was measured against`,
+    `- [One node](${origin}/api/node/${cfg.nodes[0]?.label ?? "LABEL"}?hours=24&limit=60): one node by label: latest state, up and down counts, worst delay and stalls in the window (1 to 168 hours), newest samples`,
     `- [Client health](${origin}/api/clients): latest self-reported status per watched client app, or an empty list when the check is off`,
     `- [Dashboard](${origin}/): the same data as HTML, auto-refreshing every 30 s`,
     "",

@@ -125,6 +125,8 @@ export async function scanOnce(d: Deps): Promise<ScanRun> {
   const stop = nowSec - d.cfg.graceSeconds;
   const fids = await pickFids(d);
   const ref = d.cfg.reference;
+  // Per-network references, tried for presentOn after the reference (network order).
+  const refs = Object.values(d.cfg.references ?? {});
   const networkOf = (l: Side): string => d.cfg.nodes.find((n) => n.label === l)?.network ?? "unknown";
   const run: ScanRun = {
     startedAt,
@@ -174,7 +176,7 @@ export async function scanOnce(d: Deps): Promise<ScanRun> {
     for (const { msg, on } of picture.values()) {
       for (const [l] of answered) {
         if (on.includes(l)) continue;
-        const placement = { presentNodes: on, missingOn: l, scope: scopeOf(l, on, networkOf), missingNetwork: networkOf(l), reference: ref };
+        const placement = { presentNodes: on, missingOn: l, scope: scopeOf(l, on, networkOf), missingNetwork: networkOf(l), reference: ref, references: refs };
         if (await d.store.insertDiff(toNewDiff(msg, placement, now, shard))) run.newDiffs++;
       }
     }

@@ -47,7 +47,8 @@ export interface ClientHealth {
 
 export const DEFAULT_OK_VALUES: readonly string[] = ["ok", "healthy", "up", "operational", "pass", "green"];
 export const HEALTH_TIMEOUT_MS = 5000;
-export const HEALTH_MAX_BODY = 16 * 1024;
+// 64 KB: a node observatory feed (stats.opencaster.org/api/current, 19 KB) is a health source too.
+export const HEALTH_MAX_BODY = 64 * 1024;
 const LABEL_MAX = 40;
 const PATH_MAX_DEPTH = 6;
 

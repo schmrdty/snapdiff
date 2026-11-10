@@ -28,6 +28,7 @@ The **reference** node (`REFERENCE_NODE`) is now only an anchor: it is the `pres
 ```
 NODES=snapchain,haatz,opencaster,ohsnap
 REFERENCE_NODE=snapchain
+REFERENCE_NODE_2=haatz
 NODE_SNAPCHAIN_URL=https://snapchain-api.neynar.com
 NODE_SNAPCHAIN_HEADERS={"x-api-key":"..."}
 NODE_HAATZ_URL=https://haatz.quilibrium.com
@@ -42,6 +43,8 @@ NODE_OHSNAP_NETWORK=hypersnap
 - `NODE_<LABEL>_PRIVATE=1` hides where the node lives. The dashboard card, `/api/summary` (`info[label].provider`, `note`, `error`), `info_snapshots.provider`, and the startup log name the node by its label (a fallback as `label (provider 2)`) and never by host or URL. Use it for an operator who runs a node on a bare IP and does not want that IP on a public page; the URL still has to be in the env on the snapdiff host.
 - `NODE_<LABEL>_NETWORK` is required unless the label itself contains `snapchain` or `hypersnap`. Network names follow the label rules.
 - `REFERENCE_NODE` defaults to the first label. It only anchors `presentOn` and the dashboard.
+- `REFERENCE_NODE_2` names the reference of the other network (default: that network's first-listed node). It must not share a network with `REFERENCE_NODE`. Its card is tagged `<network> reference`, `/api/summary` lists every network's reference under `references`, and `presentOn` falls back to it when the reference lacks the cast. Stall detection is unchanged: each node is still measured against its healthiest peer.
+- `NODE_<LABEL>_NAME` is a display name (1 to 40 printable ASCII characters) for the dashboard: node cards, the stall table (Node and Peer columns), and the network split table print it instead of the label. The label stays the node id in the database and the API, so history is kept. A name may not equal another node's label or name. Private nodes keep their label unless a name is set.
 - `NODE_<LABEL>_HEADERS` is optional JSON. Same quoting rules as before: load the env with `node --env-file`, never by sourcing it.
 - When `NODES` is unset the original `NODE_A_*` / `NODE_B_*` variables are read, with labels from `NODE_A_LABEL` / `NODE_B_LABEL` (defaults `snapchain`, `hypersnap`) and networks from `NODE_A_NETWORK` / `NODE_B_NETWORK` (defaults by slot: A is snapchain, B is hypersnap). Nothing changes for an existing two-node deployment.
 - Every node must answer the same endpoints. Run `npm run check-nodes -- <fid>` after adding one; it now walks the whole list and marks the reference.
@@ -80,4 +83,4 @@ So keep the original two nodes as the first two entries of `NODES`, in the same 
 
 A node behind a residential connection should not be exposed directly. The pattern used for `ohsnap.schmidtiest.xyz`: the node runs at home, a small VPS terminates TLS and forwards 3381 (HTTP API) over WireGuard to it, and snapdiff talks to the VPS hostname like any other node. The home IP never appears in snapdiff's config or its page.
 
-A node that is only reachable by IP (no hostname) can still be listed without publishing the IP: give it a label of your choosing and set `NODE_<LABEL>_PRIVATE=1`. The label is the only name snapdiff ever prints for it. The naming used on snapdiff.schmidtiest.xyz for such nodes is `{hyper|snap}{short made-up name}.node`, for example `hypersnape.node`, agreed with the operator in private.
+A node that is only reachable by IP (no hostname) can still be listed without publishing the IP: give it a label of your choosing and set `NODE_<LABEL>_PRIVATE=1`. The label is the only name snapdiff ever prints for it. The label is agreed with the operator in private; on snapdiff.schmidtiest.xyz it is either a name the operator picks or `{hyper|snap}{short made-up name}.node`, for example `hypersnape.node`.

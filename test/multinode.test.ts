@@ -38,6 +38,14 @@ test("loadNodes: NODES list with per-label env, networks inferred or explicit, v
   assert.equal(reference, "snapchain");
   assert.deepEqual(networks({ nodes }), [{ network: "snapchain", labels: ["snapchain"] }, { network: "hypersnap", labels: ["haatz", "ohsnap"] }]);
   assert.equal(loadNodes({ ...env, REFERENCE_NODE: "ohsnap" }).reference, "ohsnap");
+  assert.deepEqual(loadNodes(env).references, { snapchain: "snapchain", hypersnap: "haatz" }, "per-network references default to the first-listed node");
+  assert.deepEqual(loadNodes({ ...env, REFERENCE_NODE_2: "ohsnap" }).references, { snapchain: "snapchain", hypersnap: "ohsnap" });
+  assert.throws(() => loadNodes({ ...env, REFERENCE_NODE_2: "snapchain" }), /same network/);
+  assert.throws(() => loadNodes({ ...env, REFERENCE_NODE_2: "nope" }), /REFERENCE_NODE_2/);
+  assert.equal(loadNodes({ ...env, NODE_HAATZ_NAME: " haatz.quilibrium.com " }).nodes[1]?.name, "haatz.quilibrium.com", "NAME is trimmed");
+  assert.equal(loadNodes(env).nodes[1]?.name, undefined);
+  assert.throws(() => loadNodes({ ...env, NODE_HAATZ_NAME: "ohsnap" }), /already the label or name/);
+  assert.throws(() => loadNodes({ ...env, NODE_HAATZ_NAME: "x".repeat(41) }), /NODE_HAATZ_NAME/);
   assert.throws(() => loadNodes({ ...env, REFERENCE_NODE: "nope" }), /REFERENCE_NODE/);
   assert.throws(() => loadNodes({ NODES: "one,two", NODE_ONE_URL: "https://x", NODE_TWO_URL: "https://y" }), /NODE_ONE_NETWORK is not set/);
   assert.throws(() => loadNodes({ NODES: "one", NODE_ONE_URL: "https://x", NODE_ONE_NETWORK: "snapchain" }), /at least two/);

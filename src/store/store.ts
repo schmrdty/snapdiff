@@ -8,7 +8,8 @@ import type { Cause, DiffFilter, DiffRow, InfoSnapshot, NewDiff, NewStall, ScanR
 export interface Store {
   recordInfo(s: InfoSnapshot): Promise<void>;
   latestInfo(side: Side): Promise<InfoSnapshot | null>;
-  recentInfo(side: Side, limit: number): Promise<InfoSnapshot[]>;
+  /** Newest first. With sinceMs, only rows at or after that time (the per-node window). */
+  recentInfo(side: Side, limit: number, sinceMs?: number): Promise<InfoSnapshot[]>;
 
   /** Inserts if (hash, missingOn) is new. Returns true when inserted. */
   insertDiff(d: NewDiff): Promise<boolean>;
@@ -25,7 +26,7 @@ export interface Store {
   /** Called every info tick while a stall is open, so the record keeps its worst delay. */
   touchStall(id: number, maxBlockDelay: number): Promise<void>;
   endStall(id: number, endedAt: number, peerHeightEnd: number): Promise<void>;
-  listStalls(f: { fromMs?: number; toMs?: number; limit?: number }): Promise<StallRow[]>;
+  listStalls(f: { side?: Side; fromMs?: number; toMs?: number; limit?: number }): Promise<StallRow[]>;
 
   summary(): Promise<Summary>;
   close(): Promise<void>;

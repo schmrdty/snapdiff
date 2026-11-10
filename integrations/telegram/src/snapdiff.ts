@@ -1,11 +1,15 @@
 import pkg from '../package.json' with { type: 'json' };
+import type { NodeState } from './subscriptions.ts';
 export const DASHBOARD = 'https://snapdiff.schmidtiest.xyz';
 const API = `${DASHBOARD}/api`;
 type Row = { fid: number; hash: string; presentNodes: string[]; presentOn: string; missingOn: string; scope: string | null; cause: string; resolvedAt?: number | null };
 type Info = { reachable: boolean; maxBlockDelay: number | null; error?: string | null; provider?: string | null } | null;
 type Summary = { nodes: string[]; networks: Record<string, string[]>; reference: string; summary: { byCause: Record<string, number>; byScope: Record<string, number>; openStalls: number }; info: Record<string, Info> };
 type Client = { label?: string; name?: string; network: string; status: string; latencyMs?: number | null; latency?: number | null; checkedAt: number | null };
-type Stall = { endedAt: number | null };
+type Stall = { side?: string; shardId?: number; endedAt: number | null };
+type Shard = { shardId: number; maxHeight: number; blockDelay: number };
+type Latest = { at: number; reachable: boolean; maxBlockDelay: number | null; error?: string | null; provider?: string | null; shards?: Shard[] } | null;
+type NodeView = { label: string; name?: string; network: string; reference?: boolean; latest: Latest; window: { hours: number; samples: number; uptimePct: number | null; worstDelay: number | null; stalls: number }; stalls: { shardId: number; startedAt: number; endedAt: number | null }[] };
 const safe = (s: unknown) => String(s ?? '').replace(/https?:\/\/\S+|[\x00-\x1f\x7f-\x9f]/gi, '').slice(0, 80);
 const age = (t: number | null, now: number) => t == null ? 'never' : `${Math.max(0, Math.floor((now - t) / 1000))}s ago`;
 const UNAVAILABLE = `snapdiff api unavailable\n${DASHBOARD}`;
@@ -96,6 +100,58 @@ export class Snapdiff {
       if (open > 0) lines.push(`stalls: ${open} open`);
       return [...lines, DASHBOARD].join('\n');
     } catch { return UNAVAILABLE; }
+  }
+  /** /node: one node by label, its last 24 h, and its newest stall. Unknown labels get a pointer to /status. */
+  async node(label: string): Promise<string> {
+    try {
+      let v: NodeView;
+      try { v = await this.get<NodeView>(`/node/${encodeURIComponent(label)}`); }
+      catch (e) { if (e instanceof Error && e.message === 'snapdiff http 404') return `${safe(label)}: not a listed node, /status lists them\n${DASHBOARD}`; throw e; }
+      if (typeof v.label !== 'string' || !v.window) throw Error('invalid node');
+      const now = this.now();
+      const who = `${safe(v.name ?? v.label)} (${safe(v.network)}${v.reference ? ', reference' : ''})`;
+      const l = v.latest;
+      const lines: string[] = [];
+      if (!l) lines.push(`${who}: no data yet`);
+      else if (!l.reachable) lines.push(`${who}: down${l.error ? `, ${safe(l.error)}` : ''}, checked ${age(l.at, now)}`);
+      else lines.push(`${who}: up, delay ${typeof l.maxBlockDelay === 'number' ? `${l.maxBlockDelay}s` : 'unknown'}${l.provider ? ` via ${safe(l.provider)}` : ''}, checked ${age(l.at, now)}`);
+      const w = v.window;
+      lines.push(`last ${w.hours}h: ${w.samples} checks, ${w.uptimePct ?? 'unknown'}% up, worst delay ${typeof w.worstDelay === 'number' ? `${w.worstDelay}s` : 'unknown'}, stalls ${w.stalls}`);
+      if (l?.reachable && Array.isArray(l.shards) && l.shards.length) lines.push(`shards: ${l.shards.slice(0, 8).map(s => `${s.shardId} at ${Number(s.maxHeight).toLocaleString('en-US')} (${s.blockDelay}s)`).join('; ')}`);
+      const st = Array.isArray(v.stalls) ? v.stalls[0] : undefined;
+      if (st) lines.push(`last stall: shard ${st.shardId}, started ${age(st.startedAt, now)}, ${st.endedAt == null ? 'still open' : `lasted ${Math.max(1, Math.round((st.endedAt - st.startedAt) / 60000))} min`}`);
+      return [...lines, DASHBOARD].join('\n');
+    } catch { return UNAVAILABLE; }
+  }
+  /** Labels snapdiff lists, in order, for validating /subscribe; null when the API is unavailable. */
+  async nodeList(): Promise<string[] | null> {
+    try {
+      const s = await this.get<Summary>('/summary');
+      return Array.isArray(s.nodes) ? s.nodes.filter((n): n is string => typeof n === 'string') : null;
+    } catch { return null; }
+  }
+  /** Poller input: reachability and open stalled shards for the followed labels. Null when the API is unavailable, so the caller keeps its baseline. */
+  async nodeStates(labels: string[]): Promise<Map<string, NodeState> | null> {
+    try {
+      const s = await this.get<Summary>('/summary');
+      if (!Array.isArray(s.nodes) || !s.networks || !s.summary || !s.info) throw Error('invalid summary');
+      let open: Stall[] = [];
+      if (s.summary.openStalls > 0) {
+        const stalls = await this.get<Stall[]>('/stalls');
+        if (!Array.isArray(stalls)) throw Error('invalid stalls');
+        open = stalls.filter(x => x.endedAt == null);
+      }
+      const networkOf = new Map<string, string>();
+      for (const [network, ls] of Object.entries(s.networks)) if (Array.isArray(ls)) for (const l of ls) networkOf.set(l, network);
+      const out = new Map<string, NodeState>();
+      for (const label of labels) {
+        if (!s.nodes.includes(label)) continue;
+        const i = s.info[label];
+        const stalledShards = open.filter(x => x.side === label && typeof x.shardId === 'number').map(x => x.shardId as number).sort((a, b) => a - b);
+        out.set(label, { network: safe(networkOf.get(label) ?? 'unknown'), reachable: i ? i.reachable === true : null, error: i && !i.reachable && i.error ? safe(i.error) : null, stalledShards });
+      }
+      return out;
+    } catch { return null; }
   }
   /** /fid: only that account's open diffs, or the lack of them. */
   async fid(fid: number): Promise<string> {

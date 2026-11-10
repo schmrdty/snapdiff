@@ -30,7 +30,7 @@ export class SpacetimeStore implements Store {
 
   recordInfo(_s: InfoSnapshot): Promise<void> { return this.nope(); }
   latestInfo(_side: Side): Promise<InfoSnapshot | null> { return this.nope(); }
-  recentInfo(_side: Side, _limit: number): Promise<InfoSnapshot[]> { return this.nope(); }
+  recentInfo(_side: Side, _limit: number, _sinceMs?: number): Promise<InfoSnapshot[]> { return this.nope(); }
   insertDiff(_d: NewDiff): Promise<boolean> { return this.nope(); }
   dueForRecheck(_now: number, _a: number, _w: number, _l: number): Promise<DiffRow[]> { return this.nope(); }
   updateVerdict(_id: number, _c: Cause, _n: string | null, _t: number, _r: boolean): Promise<void> { return this.nope(); }
@@ -40,7 +40,7 @@ export class SpacetimeStore implements Store {
   startStall(_s: NewStall): Promise<number> { return this.nope(); }
   touchStall(_id: number, _d: number): Promise<void> { return this.nope(); }
   endStall(_id: number, _t: number, _h: number): Promise<void> { return this.nope(); }
-  listStalls(_f: { fromMs?: number; toMs?: number; limit?: number }): Promise<StallRow[]> { return this.nope(); }
+  listStalls(_f: { side?: Side; fromMs?: number; toMs?: number; limit?: number }): Promise<StallRow[]> { return this.nope(); }
   summary(): Promise<Summary> { return this.nope(); }
   close(): Promise<void> { return Promise.resolve(); }
 }
