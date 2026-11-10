@@ -1,13 +1,15 @@
 import { FEEDBACK_MAX } from './feedback.ts';
 export type Input = { text?: string; privateChat: boolean; mentioned: boolean; replyToBot: boolean; invitedThread: boolean };
-export type Trigger = { command: string; fid?: number; client?: string; stop?: boolean; feedback?: string; help?: boolean } | null;
-export const COMMANDS = ['snapdiff', 'status', 'fid', 'feedback', 'tip', 'help', 'start'] as const;
+export type Trigger = { command: string; fid?: number; client?: string; node?: string; stop?: boolean; feedback?: string; help?: boolean } | null;
+export const COMMANDS = ['snapdiff', 'status', 'fid', 'node', 'subscribe', 'unsubscribe', 'feedback', 'tip', 'help', 'start'] as const;
+// Node labels as snapdiff's env accepts them: letters, digits, dot, underscore, dash.
+const LABEL = /^[\w.-]{1,40}$/;
 const clientOf = (text: string) => text.match(/\bis\s+([\w .-]{1,40}?)\s+down\b/i)?.[1]?.trim();
 export function match(input: Input): Trigger {
   const raw = (input.text ?? '').trim();
   // Slash commands work wherever Telegram delivers them. A blank or "help" argument
   // returns usage instead of silence, so a wrong command still gets an answer.
-  const cmd = raw.match(/^\/(snapdiff|status|fid|feedback|tip|help|start)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  const cmd = raw.match(/^\/(snapdiff|status|fid|node|subscribe|unsubscribe|feedback|tip|help|start)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
   if (cmd) {
     const name = cmd[1]!.toLowerCase();
     const arg = (cmd[2] ?? '').trim();
@@ -15,6 +17,9 @@ export function match(input: Input): Trigger {
     if (/^help$/i.test(arg)) return { command: name, help: true };
     if (name === 'feedback') return arg ? { command: 'feedback', feedback: arg.slice(0, FEEDBACK_MAX) } : { command: 'feedback', help: true };
     if (name === 'fid') return /^[1-9]\d{0,14}$/.test(arg) && Number.isSafeInteger(Number(arg)) ? { command: 'fid', fid: Number(arg) } : { command: 'fid', help: true };
+    if (name === 'node') return LABEL.test(arg) ? { command: 'node', node: arg } : { command: 'node', help: true };
+    // No label: /subscribe lists the chat's subscriptions, /unsubscribe drops them all.
+    if (name === 'subscribe' || name === 'unsubscribe') return arg === '' ? { command: name } : LABEL.test(arg) ? { command: name, node: arg } : { command: name, help: true };
     if (name === 'tip') return { command: 'tip' };
     return { command: name, client: clientOf(arg) };
   }

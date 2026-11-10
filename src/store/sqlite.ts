@@ -268,10 +268,10 @@ export class SqliteStore implements Store {
     return r === undefined ? null : toInfo(r as Row);
   }
 
-  async recentInfo(side: Side, limit: number): Promise<InfoSnapshot[]> {
+  async recentInfo(side: Side, limit: number, sinceMs?: number): Promise<InfoSnapshot[]> {
     return this.db
-      .prepare(`SELECT * FROM info_snapshots WHERE side = ? ORDER BY at DESC LIMIT ?`)
-      .all(side, limit)
+      .prepare(`SELECT * FROM info_snapshots WHERE side = ? AND at >= ? ORDER BY at DESC LIMIT ?`)
+      .all(side, sinceMs ?? 0, limit)
       .map((r) => toInfo(r as Row));
   }
 
@@ -372,9 +372,13 @@ export class SqliteStore implements Store {
     this.db.prepare(`UPDATE stalls SET ended_at = ?, peer_height_end = ? WHERE id = ?`).run(endedAt, peerHeightEnd, id);
   }
 
-  async listStalls(f: { fromMs?: number; toMs?: number; limit?: number }): Promise<StallRow[]> {
+  async listStalls(f: { side?: Side; fromMs?: number; toMs?: number; limit?: number }): Promise<StallRow[]> {
     const where: string[] = [];
-    const args: number[] = [];
+    const args: (number | string)[] = [];
+    if (f.side !== undefined) {
+      where.push("side = ?");
+      args.push(f.side);
+    }
     if (f.fromMs !== undefined) {
       where.push("started_at >= ?");
       args.push(f.fromMs);

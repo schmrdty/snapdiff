@@ -31,6 +31,10 @@ test('trigger gate, FID validation, and help on blank or "help" arguments', () =
   assert.deepEqual(match({ ...base, text: '/help' }), { command: 'help', help: true });
   assert.deepEqual(match({ ...base, text: '/start' }), { command: 'help', help: true });
   assert.equal(match({ ...base, text: '/status@snapdiff_bot' })?.command, 'status');
+  assert.deepEqual(match({ ...base, text: '/node hypersnape.node' }), { command: 'node', node: 'hypersnape.node' });
+  assert.deepEqual(match({ ...base, text: '/node' }), { command: 'node', help: true });
+  assert.deepEqual(match({ ...base, text: '/node a b' }), { command: 'node', help: true }, 'spaces are not a label');
+  assert.deepEqual(match({ ...base, text: '/node https://x' }), { command: 'node', help: true });
   assert.equal(match({ ...base, mentioned: true, text: 'stop' })?.stop, true);
   assert.equal(match({ ...base, text: 'is Quilcast down' }), null);
   assert.equal(match({ ...base, replyToBot: true, text: 'is Quilcast down' })?.client, 'Quilcast');
@@ -77,6 +81,25 @@ test('/fid: only that FID, no network lines, overflow count', async () => {
   const text = await many.fid(123);
   assert.equal(text.split('\n').length, 5, 'three rows, one overflow line, the dashboard');
   assert.ok(text.includes('7 more open diffs'));
+});
+
+test('/node: one node now, its window, shards, newest stall; unknown label points at /status', async () => {
+  const calls: string[] = [];
+  const api = new Snapdiff(sampleFetch(calls), () => 130000);
+  const lines = (await api.node('hyper-a')).split('\n');
+  assert.equal(lines[0], 'hyper-a (hypersnap): up, delay 3s via hyper-a, checked 35s ago');
+  assert.equal(lines[1], 'last 24h: 1440 checks, 99.8% up, worst delay 9s, stalls 1');
+  assert.equal(lines[2], 'shards: 0 at 50,000,000 (3s); 1 at 51,000,000 (1s)');
+  assert.equal(lines[3], 'last stall: shard 1, started 40s ago, still open');
+  assert.equal(lines[4], 'https://snapdiff.schmidtiest.xyz');
+  assert.equal(lines.length, 5);
+  assert.deepEqual(calls, ['hyper-a'], 'only the node endpoint, nothing else');
+  const missing = new Snapdiff((async () => ({ ok: false, status: 404, json: async () => ({ error: 'unknown node' }) })) as unknown as typeof fetch);
+  assert.equal(await missing.node('nope'), 'nope: not a listed node, /status lists them\nhttps://snapdiff.schmidtiest.xyz');
+  const down = new Snapdiff((async () => ({ ok: true, json: async () => ({ ...sample['hyper-a'], latest: { at: 100000, reachable: false, maxBlockDelay: null, error: 'timeout' }, stalls: [] }) })) as unknown as typeof fetch, () => 130000);
+  const dl = (await down.node('hyper-a')).split('\n');
+  assert.equal(dl[0], 'hyper-a (hypersnap): down, timeout, checked 30s ago');
+  assert.equal(dl.length, 3, 'no shard line and no stall line when down with no stalls');
 });
 
 test('failures do not fabricate numbers and are throttled for 30 seconds', async () => {

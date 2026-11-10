@@ -25,6 +25,8 @@ const nextScanIn = (lastScanMs: number | null, intervalMs: number, now: number):
   return `${Math.round(s / 60)}m`;
 };
 
+/** Window for the stall list's count column. Every node and shard keeps its latest stall regardless of age. */
+const STALL_WINDOW_MS = 7 * 24 * 3_600_000;
 const dur = (fromMs: number, toMs: number): string => {
   const s = Math.round((toMs - fromMs) / 1000);
   if (s < 90) return `${s}s`;
@@ -44,8 +46,17 @@ const isCause = (v: string | undefined): v is Cause => v !== undefined && (CAUSE
 
 export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth[]): Hono {
   const app = new Hono();
-  // Node ids in the database ARE the configured labels, so rows render as-is.
-  const label = (s: Side) => s;
+  // Node ids in the database ARE the configured labels; NODE_<LABEL>_NAME only changes how a
+  // label is printed on this page (cards, stall and split tables). The API keeps the ids.
+  const label = (s: Side) => nodeOf(cfg, s)?.name ?? s;
+  // Header tile above each node card: "<network> reference" on every network's reference
+  // (REFERENCE_NODE and the per-network references), "<network> node" on the rest. The title
+  // line keeps only the name and the up/down pill. Colors come from data-net in the CSS.
+  const headTile = (s: Side): string => {
+    const net = nodeOf(cfg, s)?.network ?? "";
+    const isRef = Object.values(cfg.references).includes(s);
+    return `<div class="head${isRef ? " ref" : ""}">${esc(net)} ${isRef ? "reference" : "node"}</div>`;
+  };
   const nodeLabels = cfg.nodes.map((n) => n.label);
   const nets = networks(cfg);
   const networkMap = Object.fromEntries(nets.map((x) => [x.network, x.labels]));
@@ -54,7 +65,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
 
   app.get("/api/summary", async (c) => {
     const [summary, info] = await Promise.all([store.summary(), latestInfos()]);
-    return c.json({ nodes: nodeLabels, networks: networkMap, reference: cfg.reference, summary, info });
+    return c.json({ nodes: nodeLabels, networks: networkMap, reference: cfg.reference, references: cfg.references, summary, info });
   });
 
   app.get("/api/diffs", async (c) => {
@@ -73,6 +84,52 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     return c.json(await store.listStalls({ limit }));
   });
 
+  // One node by label (README "API"): latest state, a window of up/down counts and worst
+  // delay (default 24 h, max 7 days), its stalls in that window, and the newest samples.
+  // Operators asked for this to follow their own node without a login. Private nodes are
+  // safe here because src/hub.ts already stores the label as provider and in error texts.
+  app.get("/api/node/:label", async (c) => {
+    const label = c.req.param("label");
+    const node = nodeOf(cfg, label);
+    if (node === undefined) return c.json({ error: "unknown node" }, 404);
+    const hours = Math.min(Math.max(Number(c.req.query("hours") ?? 24) || 24, 1), 168);
+    const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 60) || 60, 1), 1500);
+    const now = Date.now();
+    const fromMs = now - hours * 3_600_000;
+    const [rows, stalls, latest] = await Promise.all([
+      store.recentInfo(label, hours * 60 + 120, fromMs),
+      store.listStalls({ side: label, fromMs, limit: 200 }),
+      store.latestInfo(label),
+    ]);
+    const up = rows.filter((r) => r.reachable);
+    const delays = up.map((r) => r.maxBlockDelay).filter((d): d is number => d !== null);
+    return c.json({
+      label,
+      name: node.name ?? label,
+      network: node.network,
+      reference: Object.values(cfg.references).includes(label),
+      latest,
+      window: {
+        hours,
+        fromMs,
+        toMs: now,
+        samples: rows.length,
+        up: up.length,
+        down: rows.length - up.length,
+        uptimePct: rows.length > 0 ? Math.round((up.length / rows.length) * 1000) / 10 : null,
+        worstDelay: delays.length > 0 ? Math.max(...delays) : null,
+        stalls: stalls.length,
+      },
+      stalls,
+      history: rows.slice(0, limit).map((r) => ({
+        at: r.at,
+        reachable: r.reachable,
+        maxBlockDelay: r.maxBlockDelay,
+        shards: r.shards.map((s) => ({ shardId: s.shardId, maxHeight: s.maxHeight, blockDelay: s.blockDelay })),
+      })),
+    });
+  });
+
   // Plain-text description for agents (src/llms.ts). Origin from the proxy headers when
   // behind Caddy, else from the request, so the links are absolute and correct in both setups.
   app.get("/llms.txt", (c) => {
@@ -84,13 +141,16 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
 
   app.get("/", async (c) => {
     const now = Date.now();
-    const [summary, infos, unexplained, pending, stalls] = await Promise.all([
+    const [summary, infos, unexplained, pending, recentStalls, openStalls] = await Promise.all([
       store.summary(),
       latestInfos(),
       store.listDiffs({ cause: "unexplained", limit: 100 }),
       store.listDiffs({ cause: "pending", limit: 25 }),
-      store.listStalls({ limit: 50 }),
+      store.listStalls({ limit: 2000 }),
+      store.openStalls(),
     ]);
+    // Newest 2000 plus anything still open beyond them, each once, newest first.
+    const stalls = [...recentStalls, ...openStalls.filter((o) => !recentStalls.some((r) => r.id === o.id))].sort((a, b) => b.startedAt - a.startedAt);
     const openStall = (side: Side, shardId: number) => stalls.some((s) => s.side === side && s.shardId === shardId && s.endedAt === null);
 
     const nodeCard = (side: Side, i: InfoSnapshot | null, extra: boolean) => {
@@ -105,13 +165,13 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
               `<tr><td>${s.shardId}${openStall(side, s.shardId) ? ` <span class="pill bad">stalled</span>` : ""}</td><td>${s.maxHeight.toLocaleString()}</td><td>${s.blockDelay}</td></tr>`,
           )
           .join("") ?? "";
-      return `<section class="card"${extra ? " data-extra" : " data-pin"}>
-        <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span>${side === cfg.reference ? ` <span class="pill muted">reference</span>` : ""}</h2>
+      return `<div class="col" data-net="${esc(nodeOf(cfg, side)?.network ?? "")}"${extra ? " data-extra" : " data-pin"}>${headTile(side)}<section class="card">
+        <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span></h2>
         <p class="muted">${esc(i?.provider ?? (nodeOf(cfg, side)?.private ? side : hostOf(nodeOf(cfg, side)?.url ?? "")))}${(nodeOf(cfg, side)?.providers.length ?? 1) > 1 ? ` (${nodeOf(cfg, side)?.providers.length} providers)` : ""} · checked ${ago(i?.at ?? null, now)}</p>
         ${i?.note ? `<p class="warn">${esc(i.note)}</p>` : ""}
         ${i?.error ? `<p class="bad-text">Not answering: ${esc(i.error)}. Other nodes still are; nothing is lost, this one just cannot be compared until it is back.</p>` : ""}
         ${shards ? `<table><thead><tr><th>Shard</th><th>Height</th><th>Block delay</th></tr></thead><tbody>${shards}</tbody></table>` : ""}
-      </section>`;
+      </section></div>`;
     };
 
     // Node cards: the first configured node of every network is pinned on the left
@@ -151,7 +211,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
           ${rows
             .map(
               (r) => `<tr><td>${ago(r.firstSeen, now)}</td><td>${r.fid}</td><td>${r.shard ?? "?"}</td><td class="mono">${esc(r.hash.slice(0, 18))}…</td>
-              <td>${esc(r.presentNodes.length > 0 ? r.presentNodes.join(", ") : label(r.presentOn))}</td><td>${esc(label(r.missingOn))}</td><td>${r.scope === null ? "" : `<span class="pill ${r.scope === "network" ? "bad" : "warn"}">${r.scope}</span>`}</td><td class="text">${esc(clip(castText(r.messageJson), 140))}</td><td>${esc(r.note ?? "")}</td></tr>`,
+              <td>${esc(r.presentNodes.length > 0 ? r.presentNodes.map(label).join(", ") : label(r.presentOn))}</td><td>${esc(label(r.missingOn))}</td><td>${r.scope === null ? "" : `<span class="pill ${r.scope === "network" ? "bad" : "warn"}">${r.scope}</span>`}</td><td class="text">${esc(clip(castText(r.messageJson), 140))}</td><td>${esc(r.note ?? "")}</td></tr>`,
             )
             .join("")}</tbody></table></div>`;
 
@@ -196,28 +256,45 @@ ${list
 ${nets
   .map(
     ({ network, labels }) =>
-      `<tr><td>${esc(network)}</td><td>${labels.map(esc).join(", ")}</td><td>${(summary.networkSplit[network]?.unexplained ?? 0) > 0 ? `<span class="pill bad">${summary.networkSplit[network]?.unexplained}</span>` : "0"}</td><td>${summary.networkSplit[network]?.pending ?? 0}</td></tr>`,
+      `<tr><td>${esc(network)}</td><td>${labels.map((l) => esc(label(l))).join(", ")}</td><td>${(summary.networkSplit[network]?.unexplained ?? 0) > 0 ? `<span class="pill bad">${summary.networkSplit[network]?.unexplained}</span>` : "0"}</td><td>${summary.networkSplit[network]?.pending ?? 0}</td></tr>`,
   )
   .join("")}</tbody></table></section>`;
 
-    const stallsHtml = (rows: StallRow[]) =>
-      rows.length === 0
-        ? `<p class="muted">None recorded.</p>`
-        : `<div class="scroll"><table><thead><tr><th>Node</th><th>Shard</th><th>Started</th><th>Duration</th><th>Stuck at</th><th>Peer</th><th>Peer reached</th><th>Worst delay</th></tr></thead><tbody>
-          ${rows
-            .map(
-              (s) => `<tr><td>${esc(label(s.side))}</td><td>${s.shardId}</td><td>${new Date(s.startedAt).toISOString().replace("T", " ").slice(0, 19)}Z</td>
-              <td>${s.endedAt === null ? `<span class="pill bad">ongoing ${dur(s.startedAt, now)}</span>` : dur(s.startedAt, s.endedAt)}</td>
-              <td>${s.stuckHeight.toLocaleString()}</td><td>${esc(s.peer ?? "")}</td><td>${(s.peerHeightEnd ?? s.peerHeightStart).toLocaleString()}</td><td>${s.maxBlockDelay}s</td></tr>`,
-            )
-            .join("")}</tbody></table></div>`;
+    // One line per node and shard, newest first: its latest stall (any age) plus how many and how
+    // long in the last 7 days. A pair with more than one stall opens on click to list them all (<details>:
+    // no script, because the page's only inline script is hash-pinned in the Caddy CSP).
+    // Ryan, 2026-11-10: one busy node was filling the whole table.
+    const stallCells = (s: StallRow) =>
+      `<td>${new Date(s.startedAt).toISOString().replace("T", " ").slice(0, 19)}Z</td><td>${s.endedAt === null ? `<span class="pill bad">ongoing ${dur(s.startedAt, now)}</span>` : dur(s.startedAt, s.endedAt)}</td><td>${s.stuckHeight.toLocaleString()}</td><td>${s.peer ? esc(label(s.peer)) : ""}</td><td>${(s.peerHeightEnd ?? s.peerHeightStart).toLocaleString()}</td><td>${s.maxBlockDelay}s</td>`;
+    const stallsHtml = (rows: StallRow[]) => {
+      if (rows.length === 0) return `<p class="muted">None recorded.</p>`;
+      const groups = new Map<string, StallRow[]>();
+      for (const s of rows) {
+        const k = `${s.side}\u0000${s.shardId}`;
+        groups.set(k, [...(groups.get(k) ?? []), s]);
+      }
+      const spans = (s: StallRow) => stallCells(s).replace(/<td>/g, "<span>").replace(/<\/td>/g, "</span>");
+      const head = `<div class="hdr"><span>Node</span><span>Shard</span><span>Latest started</span><span>Duration</span><span>Stuck at</span><span>Peer</span><span>Peer reached</span><span>Worst delay</span><span>Last 7 d</span></div>`;
+      const body = [...groups.values()]
+        .map((g) => {
+          const latest = g[0]!;
+          const recent = g.filter((s) => s.endedAt === null || s.startedAt >= now - STALL_WINDOW_MS);
+          const total = recent.reduce((t, s) => t + ((s.endedAt ?? now) - s.startedAt), 0);
+          const week = recent.length === 0 ? "none" : `${recent.length} stall${recent.length === 1 ? "" : "s"}, ${dur(0, total)}`;
+          const line = `<span>${esc(label(latest.side))}</span><span>${latest.shardId}</span>${spans(latest)}<span>${week}</span>`;
+          if (g.length === 1) return `<div class="row">${line}</div>`;
+          return `<details class="group"><summary>${line}</summary><table><thead><tr><th>Started</th><th>Duration</th><th>Stuck at</th><th>Peer</th><th>Peer reached</th><th>Worst delay</th></tr></thead><tbody>${g.slice(0, 100).map((s) => `<tr>${stallCells(s)}</tr>`).join("")}</tbody></table></details>`;
+        })
+        .join("");
+      return `<div class="scroll"><div class="stalls">${head}${body}</div></div>`;
+    };
 
     return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30">
 <title>snapdiff</title>
 <style>
-:root{--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66;--card:#fff;--line:#e3e2dd;--ok:#2f7d4f;--bad:#b3261e;--warn:#9a6700}
-@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--muted:#9c9b95;--card:#1d1d1b;--line:#33322f;--ok:#5cc58a;--bad:#f2867c;--warn:#e0b44c}}
+:root{--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66;--card:#fff;--line:#e3e2dd;--ok:#2f7d4f;--bad:#b3261e;--warn:#9a6700;--fc:#8a63d2;--fc-bg:#f6f2fc;--fc-line:#c9b6ea}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--muted:#9c9b95;--card:#1d1d1b;--line:#33322f;--ok:#5cc58a;--bad:#f2867c;--warn:#e0b44c;--fc:#8a63d2;--fc-bg:#231c33;--fc-line:#5d4a85}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
 main{max-width:1100px;margin:0 auto;padding:20px 16px}h1{font-size:20px;margin:0 0 4px}h2{font-size:16px;margin:0 0 4px}
 .muted{color:var(--muted);margin:0 0 8px}.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin:16px 0}
@@ -229,8 +306,15 @@ main{max-width:1100px;margin:0 auto;padding:20px 16px}h1{font-size:20px;margin:0
 .pill{font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid currentColor}.ok{color:var(--ok)}.bad,.bad-text{color:var(--bad)}.warn{color:var(--warn)}
 table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 th{font-weight:600;color:var(--muted)}.mono{font-family:ui-monospace,monospace}.scroll{overflow:auto;max-height:420px}
+.stalls{min-width:940px}.stalls .hdr,.stalls .row,.stalls summary{display:grid;grid-template-columns:minmax(110px,1.4fr) 44px 150px 118px 96px minmax(90px,1fr) 96px 80px 122px;gap:0 8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--line);font-size:14px;white-space:nowrap}
+.stalls .hdr{font-weight:600;color:var(--muted)}.stalls .row>span:first-child,.stalls summary>span:first-child{padding-left:1.2em;position:relative}
+.stalls summary{cursor:pointer;list-style:none}.stalls summary::-webkit-details-marker{display:none}.stalls summary>span:first-child::before{content:"\\25B8";position:absolute;left:0;color:var(--muted)}.stalls details[open]>summary>span:first-child::before{content:"\\25BE"}
+.stalls details>table{width:auto;margin:4px 8px 10px 2.2em}.stalls details>table td,.stalls details>table th{border-bottom:1px solid var(--line)}
 td.text{white-space:normal;min-width:240px;max-width:460px}
 .nodes{grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-top:8px}[hidden]{display:none!important}
+.col .head{font-size:12px;text-transform:uppercase;letter-spacing:.05em;padding:3px 12px;border:1px solid var(--line);border-bottom:0;border-radius:10px 10px 0 0;background:var(--line);color:var(--muted)}
+.col{display:flex;flex-direction:column}.col .head.ref{font-weight:700;color:var(--fg)}.col .card{border-radius:0 0 10px 10px;flex:1}
+.col[data-net=hypersnap] .head{background:var(--fc);border-color:var(--fc);color:#fff}.col[data-net=hypersnap] .card{background:var(--fc-bg);border-color:var(--fc-line)}
 .pager{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:16px 0 0}.pager .muted{margin:0}
 .pager button{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:2px 10px;font:inherit;cursor:pointer}
 .pager button:disabled{opacity:.4;cursor:default}
@@ -263,7 +347,7 @@ ${extraLabels.length > 0 ? `<div class="pager" id="pager" hidden><span class="mu
 ${splitHtml()}
 ${clientsHtml(clients?.() ?? [])}
 <section class="card" style="margin-bottom:12px"><h2>Shard stalls${summary.openStalls > 0 ? ` <span class="pill bad">${summary.openStalls} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}</h2>
-<p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer kept going. When every node of a network is stalled on a shard it is marked network-wide. Diffs on a stalled shard stay pending until it recovers.</p>${stallsHtml(stalls)}</section>
+<p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer kept going. When every node of a network is stalled on a shard it is marked network-wide. Diffs on a stalled shard stay pending until it recovers. One line per node and shard with its latest stall; the last column counts the past 7 days; a line with several stalls opens on click.</p>${stallsHtml(stalls)}</section>
 <section class="card"><h2>Unexplained</h2><p class="muted">${nodeLabels.map((l) => `Missing on ${esc(l)}: ${summary.byMissingNode[l] ?? 0}`).join(" · ")}. Rows are rechecked for ${Math.round(cfg.recheckWindowMs / 3600000)} h; one that turns up on the missing side moves to sync lag and leaves this list.</p>${rowsHtml(unexplained, summary.byCause.unexplained)}</section>
 <section class="card" style="margin-top:12px"><h2>Pending</h2><p class="muted">Seen on one side, not yet old enough or not yet rechecked. Most resolve on their own.</p>${rowsHtml(pending, summary.byCause.pending)}</section>
 </main></body></html>`);

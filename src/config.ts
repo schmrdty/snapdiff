@@ -25,6 +25,12 @@ export interface NodeConfig {
    * can be listed without publishing that IP. Absent means public (hosts shown as before).
    */
   private?: boolean;
+  /**
+   * Display name for the page (cards, stall and split tables). The label stays the node id in
+   * the database and the API, so a node can be renamed on the page without orphaning its
+   * history. Absent means the label is shown.
+   */
+  name?: string;
 }
 
 const headersFrom = (name: string): Record<string, string> => {
@@ -45,6 +51,12 @@ export interface Config {
   nodes: NodeConfig[];
   /** Label of the node every other node is compared against. */
   reference: string;
+  /**
+   * One reference label per network (network name to label). The reference network's entry is
+   * REFERENCE_NODE; the other network's is REFERENCE_NODE_2 or, by default, its first-listed
+   * node. Tagged on the dashboard and preferred for presentOn when the reference lacks the cast.
+   */
+  references: Record<string, string>;
   dbPath: string;
   port: number;
   /** FIDs always scanned: your watchlist (for example, accounts that declined the contract). */
@@ -115,6 +127,8 @@ export const parseFidList = (text: string): number[] =>
 /** Labels may contain dots so a private node can be named like a host ("hypersnape.node"). */
 const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9.-]{0,23}$/;
 const NETWORK_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,23}$/;
+/** Display names: short printable ASCII, so a host name or a nickname both fit. */
+const NAME_RE = /^[\x20-\x7e]{1,40}$/;
 /** "ohsnap" -> NODE_OHSNAP_URL; "open-caster" -> NODE_OPEN_CASTER_URL; "hypersnape.node" -> NODE_HYPERSNAPE_NODE_URL. */
 export const envKeyFor = (label: string): string => label.toUpperCase().replace(/[^A-Z0-9]/g, "_");
 
@@ -131,8 +145,10 @@ export const inferNetwork = (label: string): string | undefined => {
  * NODE_<LABEL>_HEADERS per label, or, when NODES is unset, from the original two-node
  * NODE_A_* / NODE_B_* variables (networks default to snapchain for A and hypersnap for B).
  * REFERENCE_NODE picks the node that anchors the dashboard and presentOn (default: the first).
+ * REFERENCE_NODE_2 picks the reference of the other network (default: its first-listed node);
+ * it must not be on the same network as REFERENCE_NODE.
  */
-export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeConfig[]; reference: string } {
+export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeConfig[]; reference: string; references: Record<string, string> } {
   const read = (name: string, fallback: string): string => {
     const raw = env[name];
     return raw === undefined || raw === "" ? fallback : raw;
@@ -168,7 +184,16 @@ export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeCo
   };
   const withProviders = (label: string, network: string, prefix: string, primaryUrl: string): NodeConfig => {
     const providers = providersFor(prefix, { url: primaryUrl.replace(/\/$/, ""), headers: headers(`${prefix}_HEADERS`) });
-    return { label, url: providers[0]!.url, network, headers: providers[0]!.headers, providers, ...(flag(`${prefix}_PRIVATE`) ? { private: true } : {}) };
+    const name = read(`${prefix}_NAME`, "").trim();
+    return {
+      label,
+      url: providers[0]!.url,
+      network,
+      headers: providers[0]!.headers,
+      providers,
+      ...(flag(`${prefix}_PRIVATE`) ? { private: true } : {}),
+      ...(name === "" ? {} : { name }),
+    };
   };
   const legacy = (slot: "A" | "B", label: string, url: string, network: string): NodeConfig => {
     const l = read(`NODE_${slot}_LABEL`, label);
@@ -192,10 +217,32 @@ export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeCo
     if (!NETWORK_RE.test(n.network)) throw new Error(`network "${n.network}" for node "${n.label}" must be 1 to 24 letters, digits, or dashes`);
     if (seen.has(n.label)) throw new Error(`duplicate node label "${n.label}"`);
     seen.add(n.label);
+    if (n.name !== undefined && !NAME_RE.test(n.name)) throw new Error(`NODE_${envKeyFor(n.label)}_NAME must be 1 to 40 printable ASCII characters`);
   }
+  // A display name must not read as another node: no name equals another node's label or name.
+  for (const n of nodes) {
+    if (n.name === undefined) continue;
+    const other = nodes.find((o) => o !== n && (o.label === n.name || o.name === n.name));
+    if (other !== undefined) throw new Error(`NODE_${envKeyFor(n.label)}_NAME "${n.name}" is already the label or name of node "${other.label}"`);
+  }
+  const labels = nodes.map((n) => n.label).join(", ");
   const reference = read("REFERENCE_NODE", nodes[0]!.label);
-  if (!seen.has(reference)) throw new Error(`REFERENCE_NODE "${reference}" is not one of: ${nodes.map((n) => n.label).join(", ")}`);
-  return { nodes, reference };
+  if (!seen.has(reference)) throw new Error(`REFERENCE_NODE "${reference}" is not one of: ${labels}`);
+  const networkOf = (label: string): string => nodes.find((n) => n.label === label)!.network;
+  // Per-network references: the first-listed node of each network, overridden by REFERENCE_NODE
+  // for its network and by REFERENCE_NODE_2 for another network.
+  const references: Record<string, string> = {};
+  for (const n of nodes) if (!(n.network in references)) references[n.network] = n.label;
+  references[networkOf(reference)] = reference;
+  const reference2 = read("REFERENCE_NODE_2", "");
+  if (reference2 !== "") {
+    if (!seen.has(reference2)) throw new Error(`REFERENCE_NODE_2 "${reference2}" is not one of: ${labels}`);
+    if (networkOf(reference2) === networkOf(reference)) {
+      throw new Error(`REFERENCE_NODE_2 "${reference2}" is on the same network as REFERENCE_NODE "${reference}"; it must be the reference of another network`);
+    }
+    references[networkOf(reference2)] = reference2;
+  }
+  return { nodes, reference, references };
 }
 
 export const nodeOf = (cfg: Pick<Config, "nodes">, label: string): NodeConfig | undefined => cfg.nodes.find((n) => n.label === label);
@@ -213,10 +260,11 @@ export function loadConfig(): Config {
   }
 
   const min = 60_000;
-  const { nodes, reference } = loadNodes();
+  const { nodes, reference, references } = loadNodes();
   return {
     nodes,
     reference,
+    references,
     dbPath: str("DB_PATH", "./data/snapdiff.db"),
     port: num("PORT", 8787),
     watchFids: [...watch].sort((x, y) => x - y),

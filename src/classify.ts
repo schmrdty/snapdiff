@@ -89,10 +89,12 @@ export interface Placement {
   missingNetwork: string;
   /** presentOn is the reference when it had the cast, else the first of presentNodes. */
   reference: Side;
+  /** Per-network references tried after the reference, in network order (optional). */
+  references?: Side[];
 }
 
 export function toNewDiff(msg: HubMessage, p: Placement, now: number, shard: number | null): NewDiff {
-  const presentOn = p.presentNodes.includes(p.reference) ? p.reference : p.presentNodes[0];
+  const presentOn = [p.reference, ...(p.references ?? [])].find((r) => p.presentNodes.includes(r)) ?? p.presentNodes[0];
   if (presentOn === undefined) throw new Error("a diff needs at least one node that has the cast");
   if (p.presentNodes.includes(p.missingOn)) throw new Error(`"${p.missingOn}" cannot both have and lack a cast`);
   return {

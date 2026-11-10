@@ -1,1 +1,156 @@
-{"summary":{"nodes":["snap-a","hyper-a","hyper-b"],"networks":{"snapchain":["snap-a"],"hypersnap":["hyper-a","hyper-b"]},"reference":"snap-a","summary":{"byCause":{"unexplained":2,"pending":1},"byScope":{"node":1,"network":1},"openStalls":1},"info":{"snap-a":{"reachable":true,"maxBlockDelay":2},"hyper-a":{"reachable":true,"maxBlockDelay":6},"hyper-b":{"reachable":false,"maxBlockDelay":null}}},"diffs":[{"fid":123,"hash":"0xabcdef1234567890","presentNodes":["snap-a"],"presentOn":"snap-a","missingOn":"hyper-a","scope":"network","cause":"unexplained","resolvedAt":null,"message":{"text":"https://evil.example"}},{"fid":99,"hash":"0x0000000000","presentNodes":["snap-a"],"presentOn":"snap-a","missingOn":"hyper-b","scope":"node","cause":"pending","resolvedAt":null}],"clients":{"clients":[{"label":"Quilcast","network":"hypersnap","status":"degraded","latencyMs":210,"checkedAt":100000}]},"stalls":[{"side":"hyper-a","shardId":1,"peer":"snap-a","startedAt":90000,"endedAt":null},{"side":"snap-a","shardId":0,"peer":"hyper-a","startedAt":80000,"endedAt":90000}]}
+{
+  "summary": {
+    "nodes": [
+      "snap-a",
+      "hyper-a",
+      "hyper-b"
+    ],
+    "networks": {
+      "snapchain": [
+        "snap-a"
+      ],
+      "hypersnap": [
+        "hyper-a",
+        "hyper-b"
+      ]
+    },
+    "reference": "snap-a",
+    "summary": {
+      "byCause": {
+        "unexplained": 2,
+        "pending": 1
+      },
+      "byScope": {
+        "node": 1,
+        "network": 1
+      },
+      "openStalls": 1
+    },
+    "info": {
+      "snap-a": {
+        "reachable": true,
+        "maxBlockDelay": 2
+      },
+      "hyper-a": {
+        "reachable": true,
+        "maxBlockDelay": 6
+      },
+      "hyper-b": {
+        "reachable": false,
+        "maxBlockDelay": null
+      }
+    }
+  },
+  "diffs": [
+    {
+      "fid": 123,
+      "hash": "0xabcdef1234567890",
+      "presentNodes": [
+        "snap-a"
+      ],
+      "presentOn": "snap-a",
+      "missingOn": "hyper-a",
+      "scope": "network",
+      "cause": "unexplained",
+      "resolvedAt": null,
+      "message": {
+        "text": "https://evil.example"
+      }
+    },
+    {
+      "fid": 99,
+      "hash": "0x0000000000",
+      "presentNodes": [
+        "snap-a"
+      ],
+      "presentOn": "snap-a",
+      "missingOn": "hyper-b",
+      "scope": "node",
+      "cause": "pending",
+      "resolvedAt": null
+    }
+  ],
+  "clients": {
+    "clients": [
+      {
+        "label": "Quilcast",
+        "network": "hypersnap",
+        "status": "degraded",
+        "latencyMs": 210,
+        "checkedAt": 100000
+      }
+    ]
+  },
+  "stalls": [
+    {
+      "side": "hyper-a",
+      "shardId": 1,
+      "peer": "snap-a",
+      "startedAt": 90000,
+      "endedAt": null
+    },
+    {
+      "side": "snap-a",
+      "shardId": 0,
+      "peer": "hyper-a",
+      "startedAt": 80000,
+      "endedAt": 90000
+    }
+  ],
+  "hyper-a": {
+    "label": "hyper-a",
+    "name": "hyper-a",
+    "network": "hypersnap",
+    "reference": false,
+    "latest": {
+      "side": "hyper-a",
+      "at": 95000,
+      "reachable": true,
+      "provider": "hyper-a",
+      "note": null,
+      "maxBlockDelay": 3,
+      "numShards": 2,
+      "numFidRegistrations": 100,
+      "shards": [
+        {
+          "shardId": 0,
+          "maxHeight": 50000000,
+          "blockDelay": 3,
+          "numMessages": 1
+        },
+        {
+          "shardId": 1,
+          "maxHeight": 51000000,
+          "blockDelay": 1,
+          "numMessages": 1
+        }
+      ]
+    },
+    "window": {
+      "hours": 24,
+      "fromMs": 0,
+      "toMs": 100000,
+      "samples": 1440,
+      "up": 1437,
+      "down": 3,
+      "uptimePct": 99.8,
+      "worstDelay": 9,
+      "stalls": 1
+    },
+    "stalls": [
+      {
+        "id": 1,
+        "side": "hyper-a",
+        "shardId": 1,
+        "stuckHeight": 50999000,
+        "peer": "snap-a",
+        "peerHeightStart": 50999100,
+        "startedAt": 90000,
+        "endedAt": null,
+        "peerHeightEnd": null,
+        "maxBlockDelay": 120
+      }
+    ],
+    "history": []
+  }
+}
