@@ -94,6 +94,8 @@ test('/node: one node now, its window, shards, newest stall; unknown label point
   assert.equal(lines[4], 'https://snapdiff.schmidtiest.xyz');
   assert.equal(lines.length, 5);
   assert.deepEqual(calls, ['hyper-a'], 'only the node endpoint, nothing else');
+  const val = new Snapdiff((async () => ({ ok: true, json: async () => ({ ...sample['hyper-a'], validator: true, reference: true }) }) as Response) as unknown as typeof fetch, () => 130000);
+  assert.equal((await val.node('hyper-a')).split('\n')[0], 'hyper-a (hypersnap validator, reference): up, delay 3s via hyper-a, checked 35s ago', 'validator is named after the network');
   const missing = new Snapdiff((async () => ({ ok: false, status: 404, json: async () => ({ error: 'unknown node' }) })) as unknown as typeof fetch);
   assert.equal(await missing.node('nope'), 'nope: not a listed node, /status lists them\nhttps://snapdiff.schmidtiest.xyz');
   const down = new Snapdiff((async () => ({ ok: true, json: async () => ({ ...sample['hyper-a'], latest: { at: 100000, reachable: false, maxBlockDelay: null, error: 'timeout' }, stalls: [] }) })) as unknown as typeof fetch, () => 130000);

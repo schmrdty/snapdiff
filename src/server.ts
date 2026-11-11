@@ -50,12 +50,16 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
   // label is printed on this page (cards, stall and split tables). The API keeps the ids.
   const label = (s: Side) => nodeOf(cfg, s)?.name ?? s;
   // Header tile above each node card: "<network> reference" on every network's reference
-  // (REFERENCE_NODE and the per-network references), "<network> node" on the rest. The title
-  // line keeps only the name and the up/down pill. Colors come from data-net in the CSS.
+  // (REFERENCE_NODE and the per-network references), "<network> node" on the rest, and
+  // "validator" in place of "node" (or after "reference") when NODE_<K>_VALIDATOR is set, so a
+  // read-only node and a validator read apart. The title line keeps only the name and the
+  // up/down pill. Colors come from data-net in the CSS.
   const headTile = (s: Side): string => {
-    const net = nodeOf(cfg, s)?.network ?? "";
+    const n = nodeOf(cfg, s);
+    const net = n?.network ?? "";
     const isRef = Object.values(cfg.references).includes(s);
-    return `<div class="head${isRef ? " ref" : ""}">${esc(net)} ${isRef ? "reference" : "node"}</div>`;
+    const role = isRef ? `reference${n?.validator ? " validator" : ""}` : n?.validator ? "validator" : "node";
+    return `<div class="head${isRef ? " ref" : ""}">${esc(net)} ${role}</div>`;
   };
   const nodeLabels = cfg.nodes.map((n) => n.label);
   const nets = networks(cfg);
@@ -108,6 +112,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       name: node.name ?? label,
       network: node.network,
       reference: Object.values(cfg.references).includes(label),
+      validator: node.validator === true,
       latest,
       window: {
         hours,
@@ -165,9 +170,14 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
               `<tr><td>${s.shardId}${openStall(side, s.shardId) ? ` <span class="pill bad">stalled</span>` : ""}</td><td>${s.maxHeight.toLocaleString()}</td><td>${s.blockDelay}</td></tr>`,
           )
           .join("") ?? "";
+      // Host on its own line, never wrapped: a long host is cut with an ellipsis (full text in
+      // the title) instead of breaking mid-word, and "checked" sits on the next line so every
+      // card has the same shape. Ryan, 2026-11-11: a wrapped host pushed the dot onto line two.
+      const host = `${i?.provider ?? (nodeOf(cfg, side)?.private ? side : hostOf(nodeOf(cfg, side)?.url ?? ""))}${(nodeOf(cfg, side)?.providers.length ?? 1) > 1 ? ` (${nodeOf(cfg, side)?.providers.length} providers)` : ""}`;
       return `<div class="col" data-net="${esc(nodeOf(cfg, side)?.network ?? "")}"${extra ? " data-extra" : " data-pin"}>${headTile(side)}<section class="card">
         <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span></h2>
-        <p class="muted">${esc(i?.provider ?? (nodeOf(cfg, side)?.private ? side : hostOf(nodeOf(cfg, side)?.url ?? "")))}${(nodeOf(cfg, side)?.providers.length ?? 1) > 1 ? ` (${nodeOf(cfg, side)?.providers.length} providers)` : ""} · checked ${ago(i?.at ?? null, now)}</p>
+        <p class="muted host" title="${esc(host)}">${esc(host)}</p>
+        <p class="muted">checked ${ago(i?.at ?? null, now)}</p>
         ${i?.note ? `<p class="warn">${esc(i.note)}</p>` : ""}
         ${i?.error ? `<p class="bad-text">Not answering: ${esc(i.error)}. Other nodes still are; nothing is lost, this one just cannot be compared until it is back.</p>` : ""}
         ${shards ? `<table><thead><tr><th>Shard</th><th>Height</th><th>Block delay</th></tr></thead><tbody>${shards}</tbody></table>` : ""}
@@ -313,7 +323,7 @@ th{font-weight:600;color:var(--muted)}.mono{font-family:ui-monospace,monospace}.
 td.text{white-space:normal;min-width:240px;max-width:460px}
 .nodes{grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-top:8px}[hidden]{display:none!important}
 .col .head{font-size:12px;text-transform:uppercase;letter-spacing:.05em;padding:3px 12px;border:1px solid var(--line);border-bottom:0;border-radius:10px 10px 0 0;background:var(--line);color:var(--muted)}
-.col{display:flex;flex-direction:column}.col .head.ref{font-weight:700;color:var(--fg)}.col .card{border-radius:0 0 10px 10px;flex:1}
+.col{display:flex;flex-direction:column}.card .host{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;margin-bottom:2px}.col .head.ref{font-weight:700;color:var(--fg)}.col .card{border-radius:0 0 10px 10px;flex:1}
 .col[data-net=hypersnap] .head{background:var(--fc);border-color:var(--fc);color:#fff}.col[data-net=hypersnap] .card{background:var(--fc-bg);border-color:var(--fc-line)}
 .pager{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:16px 0 0}.pager .muted{margin:0}
 .pager button{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:2px 10px;font:inherit;cursor:pointer}

@@ -24,6 +24,8 @@ test("loadNodes: dotted label, env key with underscores, PRIVATE flag; networks 
   const { nodes } = loadNodes(env);
   assert.deepEqual(nodes.map((n) => [n.label, n.network, n.private ?? false]), [["snapchain", "snapchain", false], ["hypersnape.node", "hypersnap", true]]);
   assert.equal(loadNodes({ ...env, NODE_HYPERSNAPE_NODE_PRIVATE: "0" }).nodes[1]!.private, undefined);
+  assert.equal(loadNodes({ ...env, NODE_HYPERSNAPE_NODE_VALIDATOR: "yes" }).nodes[1]!.validator, true, "VALIDATOR flag reads like PRIVATE");
+  assert.equal(loadNodes(env).nodes[1]!.validator, undefined, "unset means read-only");
   assert.throws(() => loadNodes({ ...env, NODE_HYPERSNAPE_NODE_NETWORK: "hyper.snap" }), /network .* letters, digits, or dashes/);
   assert.throws(() => loadNodes({ ...env, NODES: "snapchain,.node", NODE__NODE_URL: "https://x", NODE__NODE_NETWORK: "hypersnap" }), /label/);
 });
