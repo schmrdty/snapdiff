@@ -31,6 +31,12 @@ export interface NodeConfig {
    * history. Absent means the label is shown.
    */
   name?: string;
+  /**
+   * The node is a validator (it signs blocks), not a read-only node. Only the wording changes:
+   * the header tile, /api/node and the Telegram /node line say "validator" instead of "node".
+   * Absent means read-only. Ryan, 2026-11-10: operators asked to see the two kinds apart.
+   */
+  validator?: boolean;
 }
 
 const headersFrom = (name: string): Record<string, string> => {
@@ -166,7 +172,8 @@ export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeCo
       else process.env[name] = saved;
     }
   };
-  // NODE_<K>_PRIVATE=1 (or true/yes) hides the node's host everywhere snapdiff speaks.
+  // NODE_<K>_PRIVATE=1 (or true/yes) hides the node's host everywhere snapdiff speaks;
+  // NODE_<K>_VALIDATOR=1 marks a validator (the default is a read-only node).
   const flag = (name: string): boolean => ["1", "true", "yes"].includes(read(name, "").trim().toLowerCase());
   const listed = read("NODES", "")
     .split(",")
@@ -192,6 +199,7 @@ export function loadNodes(env: NodeJS.ProcessEnv = process.env): { nodes: NodeCo
       headers: providers[0]!.headers,
       providers,
       ...(flag(`${prefix}_PRIVATE`) ? { private: true } : {}),
+      ...(flag(`${prefix}_VALIDATOR`) ? { validator: true } : {}),
       ...(name === "" ? {} : { name }),
     };
   };

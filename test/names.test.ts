@@ -11,6 +11,27 @@ import type { HubMessage } from "../src/types.js";
 
 const node = (label: string, network: string, name?: string) => ({ label, url: `https://${label}.test`, network, headers: {}, providers: [], ...(name === undefined ? {} : { name }) });
 
+test("header tiles: validator replaces node, and follows reference, when NODE_<LABEL>_VALIDATOR is set", async () => {
+  const cfg = {
+    ...loadConfig(),
+    nodes: [{ ...node("snapchain", "snapchain"), validator: true }, node("hypersnap", "hypersnap"), { ...node("castrater", "hypersnap"), validator: true }, node("ohsnap", "hypersnap")],
+    reference: "snapchain",
+    references: { snapchain: "snapchain", hypersnap: "hypersnap" },
+  };
+  const store = new SqliteStore(":memory:");
+  const app = buildApp(cfg, store);
+  const html = await (await app.request("http://x/")).text();
+  const view = (await (await app.request("http://x/api/node/castrater")).json()) as { validator: boolean };
+  const ro = (await (await app.request("http://x/api/node/ohsnap")).json()) as { validator: boolean };
+  await store.close();
+  assert.match(html, /<div class="head ref">snapchain reference validator<\/div>/, "a reference that validates says both");
+  assert.match(html, /<div class="head ref">hypersnap reference<\/div>/, "a read-only reference is unchanged");
+  assert.match(html, /<div class="head">hypersnap validator<\/div><section class="card">\s*<h2>castrater /, "a validator card says validator");
+  assert.match(html, /<div class="head">hypersnap node<\/div><section class="card">\s*<h2>ohsnap /, "a read-only node still says node");
+  assert.equal(view.validator, true);
+  assert.equal(ro.validator, false);
+});
+
 test("dashboard: names replace labels on cards and in the split table; reference pills per network; API keeps ids", async () => {
   const cfg = {
     ...loadConfig(),

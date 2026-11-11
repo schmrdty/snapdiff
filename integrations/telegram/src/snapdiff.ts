@@ -9,7 +9,7 @@ type Client = { label?: string; name?: string; network: string; status: string; 
 type Stall = { side?: string; shardId?: number; endedAt: number | null };
 type Shard = { shardId: number; maxHeight: number; blockDelay: number };
 type Latest = { at: number; reachable: boolean; maxBlockDelay: number | null; error?: string | null; provider?: string | null; shards?: Shard[] } | null;
-type NodeView = { label: string; name?: string; network: string; reference?: boolean; latest: Latest; window: { hours: number; samples: number; uptimePct: number | null; worstDelay: number | null; stalls: number }; stalls: { shardId: number; startedAt: number; endedAt: number | null }[] };
+type NodeView = { label: string; name?: string; network: string; reference?: boolean; validator?: boolean; latest: Latest; window: { hours: number; samples: number; uptimePct: number | null; worstDelay: number | null; stalls: number }; stalls: { shardId: number; startedAt: number; endedAt: number | null }[] };
 const safe = (s: unknown) => String(s ?? '').replace(/https?:\/\/\S+|[\x00-\x1f\x7f-\x9f]/gi, '').slice(0, 80);
 const age = (t: number | null, now: number) => t == null ? 'never' : `${Math.max(0, Math.floor((now - t) / 1000))}s ago`;
 const UNAVAILABLE = `snapdiff api unavailable\n${DASHBOARD}`;
@@ -109,7 +109,7 @@ export class Snapdiff {
       catch (e) { if (e instanceof Error && e.message === 'snapdiff http 404') return `${safe(label)}: not a listed node, /status lists them\n${DASHBOARD}`; throw e; }
       if (typeof v.label !== 'string' || !v.window) throw Error('invalid node');
       const now = this.now();
-      const who = `${safe(v.name ?? v.label)} (${safe(v.network)}${v.reference ? ', reference' : ''})`;
+      const who = `${safe(v.name ?? v.label)} (${safe(v.network)}${v.validator ? ' validator' : ''}${v.reference ? ', reference' : ''})`;
       const l = v.latest;
       const lines: string[] = [];
       if (!l) lines.push(`${who}: no data yet`);
