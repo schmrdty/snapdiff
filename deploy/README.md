@@ -71,7 +71,7 @@ Repeat step 7 after every code change. Step 3 is safe to re-run.
 
 ## Watchlist on the server
 
-Keep the real FID list in `data/`, which `deploy.sh` never touches and git never sees (the `watch-fids.txt` in the repo is an empty example). One-time setup:
+Keep the real FID list in `data/`, which `deploy.sh` never touches and git never sees. The `watch-fids.txt` in the repo is an empty example and is not shipped; the only copy on the server is the one `WATCH_FIDS_FILE` names, and the startup log line `watchlist: N fids` tells you how many it read. One-time setup:
 
 `ssh snapdiff 'sudo -u snapdiff touch /srv/snapdiff/data/watch-fids.txt && sudo sed -i "s#^WATCH_FIDS_FILE=.*#WATCH_FIDS_FILE=/srv/snapdiff/data/watch-fids.txt#" /srv/snapdiff/.env && sudo systemctl restart snapdiff'`
 

@@ -94,7 +94,7 @@ export class HubClient {
   /** Index of the provider that answered last. */
   private active = 0;
   /** Provider index -> time until which it is benched, with the reason. */
-  private readonly benched = new Map<number, { until: number; why: string }>();
+  private readonly benched = new Map<number, { until: number; why: string; refused: boolean }>();
 
   constructor(
     readonly side: Side,
@@ -162,16 +162,25 @@ export class HubClient {
   private async get(path: string): Promise<{ status: number; body: unknown }> {
     const now = this.now();
     const order = [this.active, ...this.providers.map((_, i) => i).filter((i) => i !== this.active)];
+    const isBenched = (i: number): boolean => {
+      const b = this.benched.get(i);
+      return b !== undefined && now < b.until;
+    };
+    let tryOrder = order.filter((i) => !isBenched(i));
+    // Nobody is live. A provider benched for silence (a timeout, a network error) is tried
+    // anyway: otherwise one slow answer reports the node down for providerRetryMs without a
+    // single new request, which is what ohsnap showed on 2026-11-11 (one 10 s miss, ten
+    // minutes of "no answer"). A refusal (401, 402, 403, 429) stays benched: asking again
+    // changes nothing and costs a paid request.
+    if (tryOrder.length === 0) tryOrder = order.filter((i) => this.benched.get(i)?.refused === false);
     let lastError: HubError | null = null;
-    for (const i of order) {
-      const bench = this.benched.get(i);
-      if (bench !== undefined && now < bench.until) continue;
+    for (const i of tryOrder) {
       const p = this.providers[i]!;
       try {
         const r = await this.fetchOnce(p, path);
         if (BENCH_STATUSES.has(r.status)) {
           const why = explainStatus(r.status, this.timeoutMs);
-          this.benched.set(i, { until: now + this.providerRetryMs, why });
+          this.benched.set(i, { until: now + this.providerRetryMs, why, refused: true });
           lastError = new HubError(`${this.nameOf(i)}: ${why}`, r.status);
           continue;
         }
@@ -180,7 +189,7 @@ export class HubClient {
         return r;
       } catch (e) {
         const why = e instanceof HubError ? e.message : explainStatus(null, this.timeoutMs);
-        this.benched.set(i, { until: now + this.providerRetryMs, why });
+        this.benched.set(i, { until: now + this.providerRetryMs, why, refused: false });
         lastError = new HubError(`${this.nameOf(i)}: ${why}`, null);
       }
     }
@@ -201,7 +210,14 @@ export class HubClient {
         numShards?: number;
         shardInfos?: Array<Partial<ShardInfo>>;
       };
-      const shards: ShardInfo[] = (b.shardInfos ?? []).map((s) => ({
+      // A 200 is not enough: a status page on the node's domain answered /v1/info with
+      // {"online": true} and would have shown as a healthy node with no shards (homiehouse,
+      // 2026-11-11). Only a body with shardInfos is a Snapchain API; anything else is down,
+      // with a message that says what answered.
+      if (!Array.isArray(b.shardInfos)) {
+        throw new HubError(`${this.nameOf(this.active)}: answered, but not with a Snapchain API (no shardInfos in /v1/info)`, status);
+      }
+      const shards: ShardInfo[] = b.shardInfos.map((s) => ({
         shardId: Number(s.shardId ?? -1),
         maxHeight: Number(s.maxHeight ?? 0),
         blockDelay: Number(s.blockDelay ?? 0),
