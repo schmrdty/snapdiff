@@ -24,7 +24,7 @@ You do not need your own nodes. snapdiff only needs the HTTP API, and both netwo
 | Snapchain | `https://snapchain-api.neynar.com` | Needs `x-api-key` and a Neynar plan with credits; answers HTTP 402 when the credits run out. |
 | Hypersnap | `https://haatz.quilibrium.com` | Canonical public node listed on hypersnap.org. No key. |
 
-A node can have several providers: `NODE_A_URL` is tried first, then `NODE_A_URL_2`, `NODE_A_URL_3`, and so on, each with its own optional `_HEADERS_n`. A provider that refuses (401, 402, 403, 429) or does not answer is benched for `PROVIDER_RETRY_MIN` minutes and the next one answers; the node card says which provider is answering and why the primary is not.
+A node can have several providers: `NODE_A_URL` is tried first, then `NODE_A_URL_2`, `NODE_A_URL_3`, and so on, each with its own optional `_HEADERS_n`. A provider that refuses (401, 402, 403, 429) or does not answer is benched for `PROVIDER_RETRY_MIN` minutes and the next one answers (a provider benched for silence is still asked when no other is live, so a one-provider node recovers on the next check); the node card says which provider is answering and why the primary is not.
 
 Other hubs listed on hypersnap.org (`hub.pinata.cloud`, `hub.farcaster.standardcrypto.vc`) could not be reached from the test environment; try them from your own machine.
 

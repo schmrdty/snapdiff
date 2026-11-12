@@ -54,6 +54,41 @@ test("primary out of credits: fallback answers, snapshot names it, primary is re
   assert.equal(j.note, null);
 });
 
+test("a single provider that timed out once is asked again on the next check, not after the bench", async () => {
+  let now = 0;
+  let fail = true;
+  const calls: string[] = [];
+  const hub = new HubClient("ohsnap", [{ url: "https://ohsnap.example", headers: {} }], 1000, {
+    providerRetryMs: 600_000,
+    now: () => now,
+    fetchImpl: (async (input: string | URL | Request) => {
+      calls.push(new URL(String(input)).host);
+      if (fail) throw new Error("aborted");
+      return res(200, INFO);
+    }) as typeof fetch,
+  });
+  const miss = await hub.info();
+  assert.equal(miss.reachable, false);
+  assert.equal(miss.error, "ohsnap.example: no answer within 1s");
+  fail = false;
+  now += 60_000;
+  const back = await hub.info();
+  assert.equal(back.reachable, true, "one slow answer does not hide the node for providerRetryMs");
+  assert.equal(calls.length, 2, "the second check really asked the node");
+});
+
+test("a 200 without shardInfos is not a node: down, with a message naming the cause", async () => {
+  const hub = new HubClient("homiehouse", [{ url: "https://rpc.example", headers: {} }], 1000, {
+    fetchImpl: fakeFetch({ "rpc.example": () => res(200, JSON.stringify({ online: true })) }, []),
+  });
+  const snap = await hub.info();
+  assert.equal(snap.reachable, false);
+  assert.deepEqual(snap.shards, []);
+  assert.equal(snap.error, "rpc.example: answered, but not with a Snapchain API (no shardInfos in /v1/info)");
+  const ok = new HubClient("x", [{ url: "https://a.example", headers: {} }], 1000, { fetchImpl: fakeFetch({ "a.example": () => res(200, INFO) }, []) });
+  assert.equal((await ok.info()).reachable, true, "a real info body is unchanged");
+});
+
 test("every provider refusing: unreachable with the primary's reason, no stack traces", async () => {
   const hub = new HubClient("snapchain", [{ url: "https://paid.example", headers: {} }, { url: "https://b.example", headers: {} }], 1000, {
     fetchImpl: fakeFetch({ "paid.example": () => res(402), "b.example": () => res(403) }, []),

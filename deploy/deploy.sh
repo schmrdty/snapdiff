@@ -4,8 +4,11 @@
 #
 #   deploy/deploy.sh <vps-host-or-ip> [admin-user]
 #
-# What ships: dist/ (compiled), package.json, package-lock.json, watch-fids.txt.
-# What never ships: .env (lives only on the VPS), data/, reports/, node_modules/.
+# What ships: dist/ (compiled), package.json, package-lock.json.
+# What never ships: .env (lives only on the VPS), data/, reports/, node_modules/, and
+# watch-fids.txt: the repo copy is an empty example, the real list lives in data/ on the
+# VPS (WATCH_FIDS_FILE). Shipping the example put an empty decoy next to the app and it
+# looked like the list had been wiped on every deploy (Ryan, 2026-11-11).
 # Production dependencies are installed ON the VPS from the lockfile, so the
 # desktop's node_modules never cross the wire.
 set -euo pipefail
@@ -24,7 +27,7 @@ npm run build
 echo "== ship =="
 rsync -az --delete \
   --exclude '.env' --exclude 'data/' --exclude 'reports/' --exclude 'node_modules/' \
-  dist package.json package-lock.json watch-fids.txt \
+  dist package.json package-lock.json \
   "${ADMIN_USER}@${HOST}:${APP_DIR}/"
 
 echo "== install production deps + restart =="
