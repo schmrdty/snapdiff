@@ -1,7 +1,7 @@
 import { Bot } from 'grammy';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Snapdiff, DASHBOARD } from './snapdiff.ts';
-import { match } from './trigger.ts';
+import { match, COMMAND_MENU } from './trigger.ts';
 import { forwardText, recordFeedback } from './feedback.ts';
 import { SubStore, diffEvents, allow, POLL_MS, MAX_LABELS_PER_CHAT, MAX_SENDS_PER_TICK, type NodeState } from './subscriptions.ts';
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -17,10 +17,11 @@ const tipText = process.env.TIP_TEXT?.trim() || 'tips are not set up yet';
 // the working directory is read-only under ProtectSystem=strict.
 const subsFile = process.env.SUBSCRIPTIONS_FILE ?? `${process.env.STATE_DIRECTORY ?? '.'}/subscriptions.json`;
 const subs = new SubStore(subsFile);
-const LIMIT_MS = 20_000;
+// Per-user reply spacing. 20 s read as the bot ignoring people in a busy group; 12 s still blocks a flood (Ryan, 2026-11-13).
+const LIMIT_MS = 12_000;
 const HELP: Record<string, string> = {
-  help: 'commands: /snapdiff network summary, /status every node and client, /fid 123 open diffs for one FID, /node LABEL one node over 24 h, /subscribe LABEL node events by DM, /unsubscribe, /feedback your note, /tip. Add "is <client> down" to /snapdiff to check one client. Reply "stop" to mute me for you.',
-  snapdiff: 'usage: /snapdiff. Networks up, worst block delay, open diff counts. Add "is <client> down" to check one client.',
+  help: 'commands: /snapdiff network summary, /status every node and client, /fid 123 open diffs for one FID, /node LABEL one node over 24 h, /subscribe LABEL node events by DM, /unsubscribe, /feedback your note, /tip. Add "is <node or client> down" to /snapdiff to check one. Reply "stop" to mute me for you.',
+  snapdiff: 'usage: /snapdiff. Networks up, worst block delay, open diff counts. Add "is <node or client> down" to check one node or client.',
   status: 'usage: /status. Every node (up or down, block delay, which provider answered) and every watched client.',
   fid: 'usage: /fid 123, digits only. Lists open diffs for that FID: which nodes have each cast and which are missing it.',
   node: 'usage: /node LABEL, the label as /status prints it. That node now, its last 24 h (checks, uptime, worst delay, stalls), shard heights, and its newest stall.',
@@ -67,7 +68,8 @@ bot.on('message:text', async ctx => {
   last.set(from.id, now);
   if (m.message_thread_id && (mentioned || reply || t.command !== 'mention')) invited.set(topic, now + 24 * 60 * 60_000);
   let body: string;
-  if (t.help) body = HELP[t.command] || HELP.help!;
+  // In a group, Group Privacy delivers only /command@bot and replies, so usage text says so with the real username.
+  if (t.help) body = (HELP[t.command] || HELP.help!) + (direct ? '' : ` In a group, address me: /${t.command === 'help' ? 'status' : t.command}@${ctx.me.username}, or reply to one of my messages.`);
   else if (t.command === 'feedback') {
     const entry = { at: new Date(now).toISOString(), userId: from.id, username: from.username ?? null, chatType: m.chat.type, text: t.feedback ?? '' };
     recordFeedback(feedbackFile, entry);
@@ -140,4 +142,6 @@ async function pollEvents(): Promise<void> {
   finally { polling = false; }
 }
 setInterval(() => void pollEvents(), POLL_MS).unref();
+// The menu is the group-friendly path (see COMMAND_MENU). A failure here only loses the menu, never the bot.
+bot.api.setMyCommands(COMMAND_MENU).catch(() => console.error(new Date().toISOString(), 'setMyCommands failed'));
 bot.start({ onStart: () => console.log(new Date().toISOString(), 'telegram polling started') });

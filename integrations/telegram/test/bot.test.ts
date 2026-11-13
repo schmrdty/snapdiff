@@ -4,7 +4,7 @@ import { readFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Snapdiff } from '../src/snapdiff.ts';
-import { match } from '../src/trigger.ts';
+import { match, COMMANDS, COMMAND_MENU } from '../src/trigger.ts';
 import { recordFeedback, FEEDBACK_MAX } from '../src/feedback.ts';
 import pkg from '../package.json' with { type: 'json' };
 const sample = JSON.parse(readFileSync(new URL('./samples.json', import.meta.url), 'utf8'));
@@ -52,6 +52,25 @@ test('/snapdiff: network line, counts, optional client line, endpoint gating, ca
   assert.ok(!one.includes('evil.example'));
   await api.summary('Quilcast');
   assert.deepEqual(calls.sort(), ['clients', 'stalls', 'summary'], 'diffs never fetched for a summary; second call served from cache');
+});
+
+test('"is X down" with a node label answers from the summary, any case, no client fetch', async () => {
+  const calls: string[] = [];
+  const api = new Snapdiff(sampleFetch(calls), () => 130000);
+  const down = await api.summary('HYPER-B');
+  assert.match(down, /^hyper-b \(hypersnap node\): down; \/node hyper-b for its last 24 h$/m);
+  assert.deepEqual(calls.sort(), ['stalls', 'summary'], 'a node question never fetches clients');
+  const up = await api.summary('hyper-a');
+  assert.match(up, /^hyper-a \(hypersnap node\): up, delay 6s; \/node hyper-a for its last 24 h$/m);
+  assert.equal(up.split('\n').length, 4);
+});
+
+test('command menu: same names as the command list minus /start, within Telegram limits', () => {
+  assert.deepEqual(COMMAND_MENU.map(c => c.command), COMMANDS.filter(c => c !== 'start'));
+  for (const c of COMMAND_MENU) {
+    assert.match(c.command, /^[a-z0-9_]{1,32}$/);
+    assert.ok(c.description.length >= 1 && c.description.length <= 256, c.command);
+  }
 });
 
 test('/status: one line per node with network, clients line, stalls line, no diff counts', async () => {
