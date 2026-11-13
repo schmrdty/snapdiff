@@ -1,5 +1,5 @@
 import type { Store } from "./store.js";
-import type { Cause, DiffFilter, DiffRow, InfoSnapshot, NewDiff, NewStall, ScanRun, Side, StallRow, Summary } from "../types.js";
+import type { Cause, DiffFilter, DiffRow, InfoSnapshot, NewDiff, NewStall, ScanRun, Side, StallRow, StallScope, Summary } from "../types.js";
 
 /**
  * SpacetimeDB implementation: placeholder. Fill this in when other people want to watch live.
@@ -40,6 +40,7 @@ export class SpacetimeStore implements Store {
   startStall(_s: NewStall): Promise<number> { return this.nope(); }
   touchStall(_id: number, _d: number): Promise<void> { return this.nope(); }
   endStall(_id: number, _t: number, _h: number): Promise<void> { return this.nope(); }
+  setStallScope(_id: number, _s: StallScope): Promise<void> { return this.nope(); }
   listStalls(_f: { side?: Side; fromMs?: number; toMs?: number; limit?: number }): Promise<StallRow[]> { return this.nope(); }
   summary(): Promise<Summary> { return this.nope(); }
   close(): Promise<void> { return Promise.resolve(); }

@@ -1,4 +1,4 @@
-import type { Cause, DiffFilter, DiffRow, InfoSnapshot, NewDiff, NewStall, ScanRun, Side, StallRow, Summary } from "../types.js";
+import type { Cause, DiffFilter, DiffRow, InfoSnapshot, NewDiff, NewStall, ScanRun, Side, StallRow, StallScope, Summary } from "../types.js";
 
 /**
  * Storage boundary. Everything else talks to this interface only, so swapping SQLite
@@ -26,6 +26,8 @@ export interface Store {
   /** Called every info tick while a stall is open, so the record keeps its worst delay. */
   touchStall(id: number, maxBlockDelay: number): Promise<void>;
   endStall(id: number, endedAt: number, peerHeightEnd: number): Promise<void>;
+  /** An open stall changes scope when its network recovers around it (network to node) or stops around it (node to network). */
+  setStallScope(id: number, scope: StallScope): Promise<void>;
   listStalls(f: { side?: Side; fromMs?: number; toMs?: number; limit?: number }): Promise<StallRow[]>;
 
   summary(): Promise<Summary>;

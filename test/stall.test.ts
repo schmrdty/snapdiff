@@ -44,7 +44,27 @@ test("detectStalls: one side stuck on one shard, other healthy", () => {
   const b = info("b", { 0: 3, 1: 4, 2: 400 }, { 2: 4100 });
   const s = detectStalls([a, b], 50);
   assert.equal(s.length, 1);
-  assert.deepEqual(s[0], { side: "b", shardId: 2, stuckHeight: 4100, blockDelay: 400, peer: "a", peerHeight: 5000, peerBlockDelay: 5 });
+  assert.deepEqual(s[0], { side: "b", shardId: 2, stuckHeight: 4100, blockDelay: 400, scope: "node", peer: "a", peerHeight: 5000, peerBlockDelay: 5 });
+});
+
+test("detectStalls with networks: own network first; a whole network stopping is scope network, measured across; nothing without a healthy node anywhere", () => {
+  const net = (side: Side) => (side.startsWith("h") ? "hypersnap" : "snapchain");
+  const snap = info("snap", { 0: 1 }, { 0: 9000 });
+  const h1 = info("h1", { 0: 2 }, { 0: 8000 });
+  const h2 = info("h2", { 0: 3 }, { 0: 8000 });
+  const h3 = info("h3", { 0: 300 }, { 0: 7700 });
+  // One hypersnap node stuck: its own network's healthiest peer, never snapchain (heights differ since the fork).
+  assert.deepEqual(detectStalls([snap, h1, h2, h3], 50, net).map((v) => [v.side, v.scope, v.peer]), [["h3", "node", "h1"]]);
+  // Every hypersnap node stuck: one row per node, scope network, measured against snapchain.
+  const all = detectStalls([snap, info("h1", { 0: 100 }, { 0: 8000 }), info("h2", { 0: 101 }, { 0: 8000 }), h3], 50, net);
+  assert.deepEqual(all.map((v) => [v.side, v.scope, v.peer, v.peerHeight]), [["h1", "network", "snap", 9000], ["h2", "network", "snap", 9000], ["h3", "network", "snap", 9000]]);
+  // A down node does not block the network verdict for the reachable ones.
+  const down: InfoSnapshot = { ...h2, reachable: false };
+  assert.deepEqual(detectStalls([snap, info("h1", { 0: 100 }), down, h3], 50, net).map((v) => [v.side, v.scope]), [["h1", "network"], ["h3", "network"]]);
+  // The only node of its network stalling is that network stalling.
+  assert.deepEqual(detectStalls([info("snap", { 0: 400 }, { 0: 8800 }), h1, h2], 50, net).map((v) => [v.side, v.scope, v.peer]), [["snap", "network", "h1"]]);
+  // Everything slow everywhere: a clock or probe problem, not a stall.
+  assert.equal(detectStalls([info("snap", { 0: 400 }), info("h1", { 0: 300 }), info("h2", { 0: 310 })], 50, net).length, 0);
 });
 
 test("detectStalls: both slow is a network slowdown, not a stall; unreachable is unknown", () => {
@@ -117,7 +137,8 @@ test("stall lifecycle: start, touch, end; recheck pauses only the stalled shard"
   let open = await store.openStalls();
   assert.equal(open.length, 1);
   assert.equal(open[0]!.maxBlockDelay, 120);
-  assert.match(logs.at(-1) ?? "", /START .* shard 2 stuck at height 4900/);
+  assert.equal(open[0]!.scope, "network", "b is the only node of its network, so its stall is that network's");
+  assert.match(logs.at(-1) ?? "", /START b shard 2 \(network-wide on hypersnap\) stuck at height 4900/);
 
   // Recheck: shard-1 diff gets judged (unexplained, since age > 0 and not found); shard-2 diff stays pending.
   await recheckOnce(deps);
@@ -144,5 +165,25 @@ test("stall lifecycle: start, touch, end; recheck pauses only the stalled shard"
   assert.equal(done.peerHeightEnd, 5000);
   assert.match(logs.at(-1) ?? "", /END .* shard 2 after 2m/);
   assert.equal((await store.summary()).totalStalls, 1);
+
+  // Scope follows the network: a second hypersnap node makes b's next stall "node" scope, and
+  // when that node stops too the open row turns network-wide, then back when it recovers.
+  const cfg3 = { ...cfg, nodes: [...cfg.nodes, { label: "c", url: "http://c.test", network: "hypersnap", headers: {}, providers: [{ url: "http://c.test", headers: {} }] }] };
+  const deps3: Deps = { ...deps, cfg: cfg3, hubs: { a: hub, b: hub, c: hub } };
+  const cOk = info("c", { 0: 3, 1: 4, 2: 5 }, { 2: 5200 });
+  t += 60_000;
+  await updateStalls(deps3, [a1, info("b", { 0: 3, 1: 4, 2: 130 }, { 2: 5120 }), cOk]);
+  let row = (await store.openStalls())[0]!;
+  assert.deepEqual([row.scope, row.peer], ["node", "c"], "measured against its own network's healthy node");
+  t += 60_000;
+  await updateStalls(deps3, [a1, info("b", { 0: 3, 1: 4, 2: 190 }, { 2: 5120 }), info("c", { 0: 3, 1: 4, 2: 70 }, { 2: 5200 })]);
+  row = (await store.openStalls()).find((o) => o.side === "b")!;
+  assert.equal(row.scope, "network");
+  assert.match(logs.at(-2) ?? "", /b shard 2 is now network-wide on hypersnap/);
+  t += 60_000;
+  await updateStalls(deps3, [a1, info("b", { 0: 3, 1: 4, 2: 250 }, { 2: 5120 }), cOk]);
+  row = (await store.openStalls()).find((o) => o.side === "b")!;
+  assert.equal(row.scope, "node");
+  assert.ok(logs.some((l) => /b shard 2 is now this node only, the rest of hypersnap moves again/.test(l)), "scope downgrade is logged");
   await store.close();
 });

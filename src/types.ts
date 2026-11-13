@@ -71,6 +71,12 @@ export interface InfoSnapshot {
   numFidRegistrations: number | null;
   shards: ShardInfo[];
   error: string | null;
+  /**
+   * Node software version as /v1/info reports it ("0.17.5"). Null when unreachable or not
+   * reported; absent on rows written before 2026-11-12. src/versions.ts turns it into
+   * "behind the newest on its network", which is what the card, the API, and the bot show.
+   */
+  version?: string | null;
 }
 
 /**
@@ -101,20 +107,30 @@ export interface NewDiff {
   firstSeen: number; // unix ms
 }
 
+/**
+ * "node": this node alone, measured against a healthy peer on its own network.
+ * "network": every reachable node of its network stopped on that shard (the network lost
+ * quorum); the peer is then a healthy node on another network. See src/stall.ts.
+ */
+export type StallScope = "node" | "network";
+
 export interface NewStall {
   side: Side;
   shardId: number;
   stuckHeight: number;
+  scope: StallScope;
   /** The healthy node this shard was measured against. */
   peer: Side;
   peerHeightStart: number;
   startedAt: number; // unix ms
 }
 
-export interface StallRow extends Omit<NewStall, "peer"> {
+export interface StallRow extends Omit<NewStall, "peer" | "scope"> {
   id: number;
   /** Null only on rows written before multi-node. */
   peer: Side | null;
+  /** Null on rows written before 2026-11-12. */
+  scope: StallScope | null;
   endedAt: number | null;
   peerHeightEnd: number | null;
   maxBlockDelay: number;

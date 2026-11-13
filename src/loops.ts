@@ -47,13 +47,14 @@ export async function pollInfo(d: Deps): Promise<void> {
 
 /**
  * Opens a stall record when one node's shard stops while a healthy peer's keeps going, keeps
- * the record's worst delay current, and closes it when the shard catches up. Each stall is a
- * timestamped event: node, shard, height it stuck at, which peer it was measured against and
- * how far that peer got, start, end.
+ * the record's worst delay and scope current, and closes it when the shard catches up. Each
+ * stall is a timestamped event: node, shard, height it stuck at, scope (this node, or its
+ * whole network), which peer it was measured against and how far that peer got, start, end.
  */
 export async function updateStalls(d: Deps, infos: ReadonlyArray<InfoSnapshot | null>): Promise<void> {
   const now = clock(d);
-  const signals = detectStalls(infos, d.cfg.behindBlockDelay);
+  const networkOf = new Map<Side, string>(d.cfg.nodes.map((n) => [n.label, n.network]));
+  const signals = detectStalls(infos, d.cfg.behindBlockDelay, (side) => networkOf.get(side) ?? "");
   const open = await d.store.openStalls();
   const key = (side: Side, shardId: number) => `${side}:${shardId}`;
   const seen = new Set<string>();
@@ -64,18 +65,23 @@ export async function updateStalls(d: Deps, infos: ReadonlyArray<InfoSnapshot | 
     const existing = open.find((o) => o.side === s.side && o.shardId === s.shardId);
     if (existing !== undefined) {
       await d.store.touchStall(existing.id, s.blockDelay);
+      if (existing.scope !== s.scope) {
+        await d.store.setStallScope(existing.id, s.scope);
+        d.log(`[stall] ${s.side} shard ${s.shardId} ${s.scope === "network" ? `is now network-wide on ${networkOf.get(s.side) ?? "?"}` : `is now this node only, the rest of ${networkOf.get(s.side) ?? "?"} moves again`}`);
+      }
       continue;
     }
     const id = await d.store.startStall({
       side: s.side,
       shardId: s.shardId,
       stuckHeight: s.stuckHeight,
+      scope: s.scope,
       peer: s.peer,
       peerHeightStart: s.peerHeight,
       startedAt: now,
     });
     await d.store.touchStall(id, s.blockDelay);
-    d.log(`[stall] START ${s.side} shard ${s.shardId} stuck at height ${s.stuckHeight} (delay ${s.blockDelay}s, ${s.peer} at ${s.peerHeight})`);
+    d.log(`[stall] START ${s.side} shard ${s.shardId}${s.scope === "network" ? ` (network-wide on ${networkOf.get(s.side) ?? "?"})` : ""} stuck at height ${s.stuckHeight} (delay ${s.blockDelay}s, ${s.peer} at ${s.peerHeight})`);
   }
 
   // Close a stall only when the stalled node and at least one other node answered this

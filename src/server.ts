@@ -5,6 +5,7 @@ import { hostOf } from "./hub.js";
 import { llmsTxt } from "./llms.js";
 import type { Store } from "./store/store.js";
 import { CAUSES, type Cause, type DiffRow, type InfoSnapshot, type Side, type StallRow } from "./types.js";
+import { latestVersions, versionView } from "./versions.js";
 
 const esc = (s: string): string =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
@@ -69,7 +70,9 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
 
   app.get("/api/summary", async (c) => {
     const [summary, info] = await Promise.all([store.summary(), latestInfos()]);
-    return c.json({ nodes: nodeLabels, networks: networkMap, reference: cfg.reference, references: cfg.references, summary, info });
+    // versions[network]: newest version its reachable nodes report (src/versions.ts); the bot
+    // compares info[label].version against it to say "behind".
+    return c.json({ nodes: nodeLabels, networks: networkMap, reference: cfg.reference, references: cfg.references, summary, info, versions: latestVersions(networkMap, info) });
   });
 
   app.get("/api/diffs", async (c) => {
@@ -100,10 +103,11 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 60) || 60, 1), 1500);
     const now = Date.now();
     const fromMs = now - hours * 3_600_000;
-    const [rows, stalls, latest] = await Promise.all([
+    const [rows, stalls, latest, infos] = await Promise.all([
       store.recentInfo(label, hours * 60 + 120, fromMs),
       store.listStalls({ side: label, fromMs, limit: 200 }),
       store.latestInfo(label),
+      latestInfos(),
     ]);
     const up = rows.filter((r) => r.reachable);
     const delays = up.map((r) => r.maxBlockDelay).filter((d): d is number => d !== null);
@@ -113,6 +117,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       network: node.network,
       reference: Object.values(cfg.references).includes(label),
       validator: node.validator === true,
+      version: versionView(latest?.version, latestVersions(networkMap, infos)[node.network] ?? null),
       latest,
       window: {
         hours,
@@ -157,10 +162,17 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     // Newest 2000 plus anything still open beyond them, each once, newest first.
     const stalls = [...recentStalls, ...openStalls.filter((o) => !recentStalls.some((r) => r.id === o.id))].sort((a, b) => b.startedAt - a.startedAt);
     const openStall = (side: Side, shardId: number) => stalls.some((s) => s.side === side && s.shardId === shardId && s.endedAt === null);
+    const latestByNet = latestVersions(networkMap, infos);
 
     const nodeCard = (side: Side, i: InfoSnapshot | null, extra: boolean) => {
       const status = i === null ? "no data" : i.reachable ? "up" : "down";
       const cls = i?.reachable ? "ok" : "bad";
+      // Version line: "v0.17.4" plus a red "behind 0.17.5" pill when a reachable node on the
+      // same network runs something newer (src/versions.ts). Omitted when the node reports none.
+      const ver = versionView(i?.version, latestByNet[nodeOf(cfg, side)?.network ?? ""] ?? null);
+      const verLine = ver.current
+        ? `<p class="muted">v${esc(ver.current)}${ver.behind ? ` <span class="pill bad" title="newest on this network: ${esc(ver.latest ?? "")}">behind ${esc(ver.latest ?? "")}</span>` : ""}</p>`
+        : "";
       const shards =
         i?.shards
           .slice()
@@ -178,6 +190,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
         <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span></h2>
         <p class="muted host" title="${esc(host)}">${esc(host)}</p>
         <p class="muted">checked ${ago(i?.at ?? null, now)}</p>
+        ${verLine}
         ${i?.note ? `<p class="warn">${esc(i.note)}</p>` : ""}
         ${i?.error ? `<p class="bad-text">Not answering: ${esc(i.error)}. Other nodes still are; nothing is lost, this one just cannot be compared until it is back.</p>` : ""}
         ${shards ? `<table><thead><tr><th>Shard</th><th>Height</th><th>Block delay</th></tr></thead><tbody>${shards}</tbody></table>` : ""}
@@ -244,19 +257,24 @@ ${list
   })
   .join("")}</tbody></table></div></section>`;
 
-    // A shard stalled on every node of one network is that network stalling, not a node.
+    // A shard stalled on every node of one network is that network stalling, not a node:
+    // either every label of the network has an open row, or the detector recorded the rows
+    // with scope "network" (every reachable node over the threshold, a down node excluded).
     const networkWideStalls = (rows: StallRow[]): string[] => {
       const openOn = new Map<number, Set<Side>>();
+      const flagged = new Set<string>();
       for (const s of rows) {
         if (s.endedAt !== null) continue;
         const set = openOn.get(s.shardId) ?? new Set<Side>();
         set.add(s.side);
         openOn.set(s.shardId, set);
+        if (s.scope === "network") flagged.add(`${nodeOf(cfg, s.side)?.network ?? "?"} shard ${s.shardId}`);
       }
       const out: string[] = [];
       for (const { network, labels } of nets) {
         for (const [shardId, nodes] of openOn) if (labels.every((l) => nodes.has(l))) out.push(`${network} shard ${shardId}`);
       }
+      for (const f of flagged) if (!out.includes(f)) out.push(f);
       return out;
     };
 
@@ -291,7 +309,7 @@ ${nets
           const recent = g.filter((s) => s.endedAt === null || s.startedAt >= now - STALL_WINDOW_MS);
           const total = recent.reduce((t, s) => t + ((s.endedAt ?? now) - s.startedAt), 0);
           const week = recent.length === 0 ? "none" : `${recent.length} stall${recent.length === 1 ? "" : "s"}, ${dur(0, total)}`;
-          const line = `<span>${esc(label(latest.side))}</span><span>${latest.shardId}</span>${spans(latest)}<span>${week}</span>`;
+          const line = `<span>${esc(label(latest.side))}${latest.scope === "network" ? " (network-wide)" : ""}</span><span>${latest.shardId}</span>${spans(latest)}<span>${week}</span>`;
           if (g.length === 1) return `<div class="row">${line}</div>`;
           return `<details class="group"><summary>${line}</summary><table><thead><tr><th>Started</th><th>Duration</th><th>Stuck at</th><th>Peer</th><th>Peer reached</th><th>Worst delay</th></tr></thead><tbody>${g.slice(0, 100).map((s) => `<tr>${stallCells(s)}</tr>`).join("")}</tbody></table></details>`;
         })
@@ -357,7 +375,7 @@ ${extraLabels.length > 0 ? `<div class="pager" id="pager" hidden><span class="mu
 ${splitHtml()}
 ${clientsHtml(clients?.() ?? [])}
 <section class="card" style="margin-bottom:12px"><h2>Shard stalls${summary.openStalls > 0 ? ` <span class="pill bad">${summary.openStalls} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}</h2>
-<p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer kept going. When every node of a network is stalled on a shard it is marked network-wide. Diffs on a stalled shard stay pending until it recovers. One line per node and shard with its latest stall; the last column counts the past 7 days; a line with several stalls opens on click.</p>${stallsHtml(stalls)}</section>
+<p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer on the same network kept going. When every reachable node of a network is stalled on a shard the rows are marked network-wide: that network stopped deciding blocks. Diffs on a stalled shard stay pending until it recovers. One line per node and shard with its latest stall; the last column counts the past 7 days; a line with several stalls opens on click.</p>${stallsHtml(stalls)}</section>
 <section class="card"><h2>Unexplained</h2><p class="muted">${nodeLabels.map((l) => `Missing on ${esc(l)}: ${summary.byMissingNode[l] ?? 0}`).join(" · ")}. Rows are rechecked for ${Math.round(cfg.recheckWindowMs / 3600000)} h; one that turns up on the missing side moves to sync lag and leaves this list.</p>${rowsHtml(unexplained, summary.byCause.unexplained)}</section>
 <section class="card" style="margin-top:12px"><h2>Pending</h2><p class="muted">Seen on one side, not yet old enough or not yet rechecked. Most resolve on their own.</p>${rowsHtml(pending, summary.byCause.pending)}</section>
 </main></body></html>`);

@@ -3,15 +3,18 @@ import type { NodeState } from './subscriptions.ts';
 export const DASHBOARD = 'https://snapdiff.schmidtiest.xyz';
 const API = `${DASHBOARD}/api`;
 type Row = { fid: number; hash: string; presentNodes: string[]; presentOn: string; missingOn: string; scope: string | null; cause: string; resolvedAt?: number | null };
-type Info = { reachable: boolean; maxBlockDelay: number | null; error?: string | null; provider?: string | null } | null;
-type Summary = { nodes: string[]; networks: Record<string, string[]>; reference: string; summary: { byCause: Record<string, number>; byScope: Record<string, number>; openStalls: number }; info: Record<string, Info> };
+type Info = { reachable: boolean; maxBlockDelay: number | null; error?: string | null; provider?: string | null; version?: string | null } | null;
+type Summary = { nodes: string[]; networks: Record<string, string[]>; reference: string; summary: { byCause: Record<string, number>; byScope: Record<string, number>; openStalls: number }; info: Record<string, Info>; versions?: Record<string, string | null> };
 type Client = { label?: string; name?: string; network: string; status: string; latencyMs?: number | null; latency?: number | null; checkedAt: number | null };
-type Stall = { side?: string; shardId?: number; endedAt: number | null };
+type Stall = { side?: string; shardId?: number; scope?: string | null; endedAt: number | null };
 type Shard = { shardId: number; maxHeight: number; blockDelay: number };
 type Latest = { at: number; reachable: boolean; maxBlockDelay: number | null; error?: string | null; provider?: string | null; shards?: Shard[] } | null;
-type NodeView = { label: string; name?: string; network: string; reference?: boolean; validator?: boolean; latest: Latest; window: { hours: number; samples: number; uptimePct: number | null; worstDelay: number | null; stalls: number }; stalls: { shardId: number; startedAt: number; endedAt: number | null }[] };
+type NodeVersion = { current: string | null; latest: string | null; behind: boolean };
+type NodeView = { label: string; name?: string; network: string; reference?: boolean; validator?: boolean; version?: NodeVersion; latest: Latest; window: { hours: number; samples: number; uptimePct: number | null; worstDelay: number | null; stalls: number }; stalls: { shardId: number; startedAt: number; endedAt: number | null }[] };
 const safe = (s: unknown) => String(s ?? '').replace(/https?:\/\/\S+|[\x00-\x1f\x7f-\x9f]/gi, '').slice(0, 80);
 const age = (t: number | null, now: number) => t == null ? 'never' : `${Math.max(0, Math.floor((now - t) / 1000))}s ago`;
+// ", v0.17.4 (behind, newest 0.17.5)" or ", v0.17.5"; nothing when the API has no version for the node.
+const versionText = (v: NodeVersion | undefined) => v && typeof v.current === 'string' ? `, v${safe(v.current)}${v.behind && v.latest ? ` (behind, newest ${safe(v.latest)})` : ''}` : '';
 const UNAVAILABLE = `snapdiff api unavailable\n${DASHBOARD}`;
 export class Snapdiff {
   private cache = new Map<string, { until: number; value: unknown }>();
@@ -114,7 +117,7 @@ export class Snapdiff {
       const lines: string[] = [];
       if (!l) lines.push(`${who}: no data yet`);
       else if (!l.reachable) lines.push(`${who}: down${l.error ? `, ${safe(l.error)}` : ''}, checked ${age(l.at, now)}`);
-      else lines.push(`${who}: up, delay ${typeof l.maxBlockDelay === 'number' ? `${l.maxBlockDelay}s` : 'unknown'}${l.provider ? ` via ${safe(l.provider)}` : ''}, checked ${age(l.at, now)}`);
+      else lines.push(`${who}: up, delay ${typeof l.maxBlockDelay === 'number' ? `${l.maxBlockDelay}s` : 'unknown'}${l.provider ? ` via ${safe(l.provider)}` : ''}, checked ${age(l.at, now)}${versionText(v.version)}`);
       const w = v.window;
       lines.push(`last ${w.hours}h: ${w.samples} checks, ${w.uptimePct ?? 'unknown'}% up, worst delay ${typeof w.worstDelay === 'number' ? `${w.worstDelay}s` : 'unknown'}, stalls ${w.stalls}`);
       if (l?.reachable && Array.isArray(l.shards) && l.shards.length) lines.push(`shards: ${l.shards.slice(0, 8).map(s => `${s.shardId} at ${Number(s.maxHeight).toLocaleString('en-US')} (${s.blockDelay}s)`).join('; ')}`);
@@ -147,8 +150,12 @@ export class Snapdiff {
       for (const label of labels) {
         if (!s.nodes.includes(label)) continue;
         const i = s.info[label];
-        const stalledShards = open.filter(x => x.side === label && typeof x.shardId === 'number').map(x => x.shardId as number).sort((a, b) => a - b);
-        out.set(label, { network: safe(networkOf.get(label) ?? 'unknown'), reachable: i ? i.reachable === true : null, error: i && !i.reachable && i.error ? safe(i.error) : null, stalledShards });
+        const mine = open.filter(x => x.side === label && typeof x.shardId === 'number');
+        const stalledShards = mine.map(x => x.shardId as number).sort((a, b) => a - b);
+        const networkStalledShards = mine.filter(x => x.scope === 'network').map(x => x.shardId as number).sort((a, b) => a - b);
+        const network = networkOf.get(label) ?? 'unknown';
+        const latestVersion = s.versions && typeof s.versions[network] === 'string' ? safe(s.versions[network]) : null;
+        out.set(label, { network: safe(network), reachable: i ? i.reachable === true : null, error: i && !i.reachable && i.error ? safe(i.error) : null, stalledShards, networkStalledShards, version: i && typeof i.version === 'string' ? safe(i.version) : null, latestVersion });
       }
       return out;
     } catch { return null; }

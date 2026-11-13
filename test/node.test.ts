@@ -44,8 +44,8 @@ test("/api/node: 404 for unknown labels, window stats, stalls for that node only
   for (let i = 0; i < 10; i++) await store.recordInfo(snap("castrater", now - i * min, i !== 3 && i !== 7, i === 5 ? 9 : 1, "castrater"));
   await store.recordInfo(snap("castrater", now - 30 * 3_600_000, true, 50, "castrater"));
   await store.recordInfo(snap("hypersnap", now - min, true, 2));
-  const stallId = await store.startStall({ side: "castrater", shardId: 1, stuckHeight: 150, peer: "snapchain", peerHeightStart: 160, startedAt: now - 5 * min });
-  await store.startStall({ side: "hypersnap", shardId: 0, stuckHeight: 10, peer: "snapchain", peerHeightStart: 20, startedAt: now - 2 * min });
+  const stallId = await store.startStall({ side: "castrater", shardId: 1, stuckHeight: 150, scope: "node", peer: "snapchain", peerHeightStart: 160, startedAt: now - 5 * min });
+  await store.startStall({ side: "hypersnap", shardId: 0, stuckHeight: 10, scope: "network", peer: "snapchain", peerHeightStart: 20, startedAt: now - 2 * min });
   const app = buildApp(cfg, store);
 
   const missing = await app.request("http://x/api/node/nobody");

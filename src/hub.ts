@@ -209,6 +209,7 @@ export class HubClient {
         dbStats?: { numFidRegistrations?: number };
         numShards?: number;
         shardInfos?: Array<Partial<ShardInfo>>;
+        version?: unknown;
       };
       // A 200 is not enough: a status page on the node's domain answered /v1/info with
       // {"online": true} and would have shown as a healthy node with no shards (homiehouse,
@@ -235,6 +236,8 @@ export class HubClient {
         numFidRegistrations: b.dbStats?.numFidRegistrations ?? null,
         shards,
         error: null,
+        // Short and printable only: this string reaches the page and Telegram as-is.
+        version: typeof b.version === "string" && /^[\w.+-]{1,32}$/.test(b.version) ? b.version : null,
       };
     } catch (e) {
       return {
@@ -248,6 +251,7 @@ export class HubClient {
         numFidRegistrations: null,
         shards: [],
         error: e instanceof Error ? e.message : String(e),
+        version: null,
       };
     }
   }
