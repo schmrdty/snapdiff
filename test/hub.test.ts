@@ -2,7 +2,7 @@
 // the snapshot says who answered and why the primary did not. Fetch is faked; nothing goes online.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { HubClient, explainStatus } from "../src/hub.js";
+import { HubClient, explainStatus, normalizeFid } from "../src/hub.js";
 
 const INFO = JSON.stringify({ dbStats: { numFidRegistrations: 10 }, numShards: 2, version: "0.17.5", shardInfos: [{ shardId: 1, maxHeight: 5, blockDelay: 1 }] });
 const res = (status: number, body = ""): Response => ({ status, text: async () => body }) as unknown as Response;
@@ -102,6 +102,54 @@ test("every provider refusing: unreachable with the primary's reason, no stack t
   assert.equal(i.reachable, false);
   assert.equal(i.provider, null);
   assert.match(i.error ?? "", /b\.example: the provider turned our key away \(HTTP 403\)|paid\.example: out of credits/);
+});
+
+test("native-account FIDs: strings become numbers in casts and events; origin is asked at /v1/nativeAccount", async () => {
+  const byPath = (p: string): Response => {
+    if (p.startsWith("/v1/castsByFid")) {
+      return res(200, JSON.stringify({ messages: [
+        { hash: "0xaa", data: { type: "MESSAGE_TYPE_CAST_ADD", fid: "4294967296", timestamp: 1 } },
+        { hash: "0xbb", data: { type: "MESSAGE_TYPE_CAST_ADD", fid: 7, timestamp: 2 } },
+        { hash: "0xcc", data: { type: "MESSAGE_TYPE_CAST_ADD", fid: "not-a-fid", timestamp: 3 } },
+      ] }));
+    }
+    if (p.startsWith("/v1/events")) {
+      return res(200, JSON.stringify({ events: [
+        { type: "HUB_EVENT_TYPE_MERGE_MESSAGE", shardIndex: 1, mergeMessageBody: { message: { data: { type: "MESSAGE_TYPE_CAST_ADD", fid: "4294967297" } } } },
+        { type: "HUB_EVENT_TYPE_MERGE_MESSAGE", shardIndex: 2, mergeMessageBody: { message: { data: { type: "MESSAGE_TYPE_CAST_ADD", fid: 2 } } } },
+      ] }));
+    }
+    // Shapes as observed on 2026-11-13: Hypersnap answers 400 with a NotFound detail for an unknown native account.
+    if (p.startsWith("/v1/nativeAccount")) {
+      return p.includes("fid=4294967296")
+        ? res(200, JSON.stringify({ fid: "4294967296" }))
+        : res(400, JSON.stringify({ error: "Native registration lookup failed", error_detail: 'status: NotFound, message: "native account not found"' }));
+    }
+    if (p.startsWith("/v1/onChainEventsByFid")) return res(200, JSON.stringify({ events: [{}] }));
+    return res(404, "Not Found");
+  };
+  const paths: string[] = [];
+  const hub = new HubClient("hyper", [{ url: "https://h.example", headers: {} }], 1000, {
+    providerRetryMs: 1000,
+    now: () => 0,
+    fetchImpl: (async (input: string | URL | Request) => {
+      const u = new URL(String(input));
+      paths.push(u.pathname + u.search);
+      return byPath(u.pathname + u.search);
+    }) as typeof fetch,
+  });
+  const casts = await hub.castsByFid(4294967296, 0, 10, 1);
+  assert.deepEqual(casts.map((m) => [m.hash, m.data.fid]), [["0xaa", 4294967296], ["0xbb", 7]], "a string fid is read as a number; an unreadable fid is skipped");
+  assert.deepEqual(await hub.recentMergeFids(1, 10), [{ fid: 4294967297, type: "MESSAGE_TYPE_CAST_ADD", shardIndex: 1 }, { fid: 2, type: "MESSAGE_TYPE_CAST_ADD", shardIndex: 2 }]);
+  assert.equal(await hub.knowsFid(4294967296), true);
+  assert.equal(await hub.knowsFid(4294967297), false, "a native fid this node has never seen");
+  assert.equal(await hub.knowsFid(7), true, "legacy fids still use on-chain events");
+  assert.ok(paths.some((p) => p.startsWith("/v1/nativeAccount?fid=4294967296")), "native lookup route");
+  assert.ok(paths.some((p) => p.startsWith("/v1/onChainEventsByFid?fid=7")), "legacy lookup route");
+  // A Snapchain node has no such route: 404 reads as "not registered here", never as an error.
+  const snap = new HubClient("snap", [{ url: "https://s.example", headers: {} }], 1000, { providerRetryMs: 1000, now: () => 0, fetchImpl: (async () => res(404, "Not Found")) as typeof fetch });
+  assert.equal(await snap.knowsFid(4294967296), false);
+  assert.deepEqual([normalizeFid("12"), normalizeFid(12), normalizeFid("0x1"), normalizeFid(-1), normalizeFid("99999999999999999999"), normalizeFid(1.5)], [12, 12, null, null, null, null]);
 });
 
 test("a not-found is a normal answer, not a reason to fail over", async () => {

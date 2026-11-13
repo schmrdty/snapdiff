@@ -30,7 +30,14 @@ test("shardForFid: exact algorithm, stable vectors, range", () => {
   assert.equal(shardForFid(216202, 2), 1);
   assert.equal(shardForFid(777527, 2), 1);
   assert.equal(shardForFid(1108653, 2), 2);
-  assert.throws(() => shardForFid(2 ** 32, 2), "fid is u32 on disk");
+  // Native FIDs (2^32 and up) hash a 12-byte key: four zero bytes then the u64. These values
+  // come from this transcription of make_fid_key; check-nodes confirms them against /v1/events
+  // once a native account has posted.
+  assert.equal(shardForFid(2 ** 32, 2), 1);
+  assert.equal(shardForFid(2 ** 32 + 1, 2), 2);
+  assert.equal(shardForFid(2 ** 32 + 1, 3), 1);
+  assert.equal(shardForFid(2 ** 33, 2), 2);
+  assert.throws(() => shardForFid(2 ** 53, 2), "beyond safe integers");
   for (let fid = 1; fid < 2000; fid++) {
     const s = shardForFid(fid, 3);
     assert.ok(s >= 1 && s <= 3);
