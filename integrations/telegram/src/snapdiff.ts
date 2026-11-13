@@ -73,13 +73,29 @@ export class Snapdiff {
     const ms = found.latencyMs ?? found.latency;
     return `${safe(found.label ?? found.name)}: ${safe(found.status)}, latency ${typeof ms === 'number' ? `${ms}ms` : 'unknown'}, checked ${age(found.checkedAt, this.now())}`;
   }
-  /** /snapdiff and mentions: the network picture and open diff counts, plus one client when asked "is X down". */
+  /**
+   * "is X down" where X is a node label (case-insensitive): answered from the summary already in
+   * hand, so no client fetch. People ask about nodes far more often than about clients, and the
+   * old answer ("not listed in client health") read as a failure. Null when X is not a node.
+   */
+  private nodeLine(s: Summary, name: string): string | null {
+    const label = s.nodes.find(n => typeof n === 'string' && n.toLowerCase() === name.toLowerCase());
+    if (!label) return null;
+    const network = Object.entries(s.networks).find(([, members]) => Array.isArray(members) && members.includes(label))?.[0] ?? 'unknown';
+    const i = s.info[label];
+    const who = `${safe(label)} (${safe(network)} node)`;
+    const more = `; /node ${safe(label)} for its last 24 h`;
+    if (!i) return `${who}: no data yet${more}`;
+    if (!i.reachable) return `${who}: down${i.error ? `, ${safe(i.error)}` : ''}${more}`;
+    return `${who}: up, delay ${typeof i.maxBlockDelay === 'number' ? `${i.maxBlockDelay}s` : 'unknown'}${i.provider ? ` via ${safe(i.provider)}` : ''}${typeof i.version === 'string' ? `, v${safe(i.version)}` : ''}${more}`;
+  }
+  /** /snapdiff and mentions: the network picture and open diff counts, plus one node or client when asked "is X down". */
   async summary(clientName?: string): Promise<string> {
     try {
       const { s, open } = await this.summaryAndStalls();
       const scope = s.summary.byScope;
       const lines = [this.networkLine(s), `unexplained: node ${scope.node ?? 'unknown'}, network ${scope.network ?? 'unknown'}; pending ${s.summary.byCause.pending ?? 'unknown'}; stalls ${open}`];
-      if (clientName) lines.push(await this.clientLine(clientName));
+      if (clientName) lines.push(this.nodeLine(s, clientName) ?? await this.clientLine(clientName));
       return [...lines, DASHBOARD].join('\n');
     } catch { return UNAVAILABLE; }
   }

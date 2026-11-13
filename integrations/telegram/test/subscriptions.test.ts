@@ -59,6 +59,8 @@ test('events: baseline is silent, then down, back up, stall, stall ended; unchan
   const lag = state({ version: '0.17.4', latestVersion: '0.17.5' });
   assert.deepEqual(diffEvents('n', same, lag).map(e => [e.kind, e.text]), [['behind', 'n (hypersnap): version 0.17.4 is behind, newest on hypersnap is 0.17.5']]);
   assert.deepEqual(diffEvents('n', lag, lag), [], 'staying behind does not repeat');
+  assert.deepEqual(diffEvents('n', lag, state({ version: '0.17.4', latestVersion: '0.17.6' })).map(e => [e.kind, e.text]), [['behind', 'n (hypersnap): version 0.17.4 is still behind, newest on hypersnap is now 0.17.6']], 'the newest moving further ahead fires again');
+  assert.deepEqual(diffEvents('n', lag, state({ version: '0.17.5', latestVersion: '0.17.6' })).map(e => e.kind), ['behind'], 'a partial upgrade that is still behind fires again');
   assert.deepEqual(diffEvents('n', lag, state({ version: '0.17.5', latestVersion: '0.17.5' })).map(e => [e.kind, e.text]), [['current', 'n (hypersnap): version 0.17.5, current again']]);
   assert.deepEqual(diffEvents('n', state(), lag).map(e => e.kind), ['behind'], 'from unknown straight to behind fires once');
   assert.deepEqual(diffEvents('n', lag, state({ version: null, latestVersion: '0.17.5' })), [], 'losing the version (node down) is not "current"');

@@ -2,6 +2,22 @@ import { FEEDBACK_MAX } from './feedback.ts';
 export type Input = { text?: string; privateChat: boolean; mentioned: boolean; replyToBot: boolean; invitedThread: boolean };
 export type Trigger = { command: string; fid?: number; client?: string; node?: string; stop?: boolean; feedback?: string; help?: boolean } | null;
 export const COMMANDS = ['snapdiff', 'status', 'fid', 'node', 'subscribe', 'unsubscribe', 'feedback', 'tip', 'help', 'start'] as const;
+// Registered with Telegram at start so the "/" menu lists the commands. In a group the client
+// appends @botname when a menu entry is tapped, and /command@botname is the one form Group
+// Privacy always delivers; a bare /command reaches the bot only when it posted last in that group.
+// Telegram limits: command 1 to 32 chars of [a-z0-9_], description 1 to 256 chars. /start is
+// Telegram's own entry point and is left off the menu.
+export const COMMAND_MENU: { command: string; description: string }[] = [
+  { command: 'snapdiff', description: 'networks up, worst delay, open diff counts; add "is X down" for one node or client' },
+  { command: 'status', description: 'every node and every watched client' },
+  { command: 'fid', description: 'open diffs for one FID: /fid 123' },
+  { command: 'node', description: 'one node now and over 24 h: /node LABEL' },
+  { command: 'subscribe', description: 'node events by DM, private chat only: /subscribe LABEL' },
+  { command: 'unsubscribe', description: 'stop following a node' },
+  { command: 'feedback', description: 'a note to the operator' },
+  { command: 'tip', description: 'where to send a tip toward node and server costs' },
+  { command: 'help', description: 'the command list' },
+];
 // Node labels as snapdiff's env accepts them: letters, digits, dot, underscore, dash.
 const LABEL = /^[\w.-]{1,40}$/;
 const clientOf = (text: string) => text.match(/\bis\s+([\w .-]{1,40}?)\s+down\b/i)?.[1]?.trim();

@@ -106,8 +106,11 @@ export function diffEvents(label: string, prev: NodeState | undefined, next: Nod
   // The network recovered but this node did not: from here on it is the node's own stall.
   for (const s of prev.networkStalledShards) if (next.stalledShards.includes(s) && !netWide(next, s)) out.push({ label, kind: 'left-behind', text: `${who}: still stalled on shard ${s} while the rest of ${next.network} moves again` });
   // Version drift: fires when the node first reads behind (its own upgrade lagging, or a peer
-  // moving ahead), and once more when it is current again. Unknown versions never fire.
+  // moving ahead), again whenever the gap changes while it stays behind (the newest moved on,
+  // or the node upgraded part way), and once more when it is current again. Without the middle
+  // case a node behind on 0.17.6 heard nothing when 0.17.7 shipped (2026-11-13). Unknown versions never fire.
   if (!isBehind(prev) && isBehind(next)) out.push({ label, kind: 'behind', text: `${who}: version ${next.version} is behind, newest on ${next.network} is ${next.latestVersion}` });
+  else if (isBehind(prev) && isBehind(next) && (prev.version !== next.version || prev.latestVersion !== next.latestVersion)) out.push({ label, kind: 'behind', text: `${who}: version ${next.version} is still behind, newest on ${next.network} is now ${next.latestVersion}` });
   if (isBehind(prev) && !isBehind(next) && next.version !== null) out.push({ label, kind: 'current', text: `${who}: version ${next.version}, current again` });
   return out;
 }
