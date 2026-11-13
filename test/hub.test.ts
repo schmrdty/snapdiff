@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { HubClient, explainStatus } from "../src/hub.js";
 
-const INFO = JSON.stringify({ dbStats: { numFidRegistrations: 10 }, numShards: 2, shardInfos: [{ shardId: 1, maxHeight: 5, blockDelay: 1 }] });
+const INFO = JSON.stringify({ dbStats: { numFidRegistrations: 10 }, numShards: 2, version: "0.17.5", shardInfos: [{ shardId: 1, maxHeight: 5, blockDelay: 1 }] });
 const res = (status: number, body = ""): Response => ({ status, text: async () => body }) as unknown as Response;
 
 const fakeFetch = (byHost: Record<string, () => Response>, calls: string[]) =>
@@ -85,8 +85,13 @@ test("a 200 without shardInfos is not a node: down, with a message naming the ca
   assert.equal(snap.reachable, false);
   assert.deepEqual(snap.shards, []);
   assert.equal(snap.error, "rpc.example: answered, but not with a Snapchain API (no shardInfos in /v1/info)");
+  assert.equal(snap.version, null);
   const ok = new HubClient("x", [{ url: "https://a.example", headers: {} }], 1000, { fetchImpl: fakeFetch({ "a.example": () => res(200, INFO) }, []) });
-  assert.equal((await ok.info()).reachable, true, "a real info body is unchanged");
+  const good = await ok.info();
+  assert.equal(good.reachable, true, "a real info body is unchanged");
+  assert.equal(good.version, "0.17.5", "the version string is kept");
+  const odd = new HubClient("x", [{ url: "https://a.example", headers: {} }], 1000, { fetchImpl: fakeFetch({ "a.example": () => res(200, INFO.replace('"0.17.5"', '"<b>x</b>"')) }, []) });
+  assert.equal((await odd.info()).version, null, "a version with markup or spaces is dropped, not shown");
 });
 
 test("every provider refusing: unreachable with the primary's reason, no stack traces", async () => {

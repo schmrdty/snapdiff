@@ -91,10 +91,11 @@ snapdiff records each of these as a stall event:
 | `side`, `shardId` | Which node, which shard |
 | `startedAt`, `endedAt` | Wall-clock bounds; `endedAt` is null while ongoing |
 | `stuckHeight` | The shard's height on the stalled node when the stall was first seen |
+| `scope` | `node`: this node alone, measured against a healthy peer on its own network. `network`: every reachable node of its network stopped on that shard (quorum lost), measured against the other network. Null on rows before 2026-11-12 |
 | `peerHeightStart`, `peerHeightEnd` | How far the other node's copy of that shard got |
 | `maxBlockDelay` | Worst `blockDelay` observed during the stall |
 
-Detection rule: a shard's `blockDelay` on one node is above `BEHIND_BLOCK_DELAY` (default 50 s) while the same shard on the other node is at or below it. Both nodes slow on the same shard is a network slowdown, not a stall, and is not recorded. `blockDelay` is `now - newest block timestamp` per shard, so a stuck shard's delay climbs one second per second and crosses the threshold within a minute.
+Detection rule: a shard's `blockDelay` on one node is above `BEHIND_BLOCK_DELAY` (default 50 s) while the same shard on its healthiest peer on the same network is at or below it (scope `node`). When every reachable node of a network is above it, the rows get scope `network` and are measured against the other network, and the dashboard shows one network-wide pill. Nothing is recorded when no node anywhere is healthy. `blockDelay` is `now - newest block timestamp` per shard, so a stuck shard's delay climbs one second per second and crosses the threshold within a minute.
 
 Every diff is tagged with its FID's shard. During a stall, diffs whose missing side is the stalled node on that shard stay `pending`; diffs on the healthy shard are still judged. `npm run check-nodes` verifies the shard function against the node's own `/v1/events` (every merged message on shard S must hash to S) so a transcription error cannot silently mis-tag.
 
@@ -120,10 +121,10 @@ A one-sided fetch failure never creates a diff. The FID is skipped for that scan
 | Route | Returns |
 |---|---|
 | `GET /` | Dashboard (auto-refresh 30 s) |
-| `GET /api/summary` | `nodes` (labels, in order), `networks` (network to labels), `reference`, counts by cause, by missing node (`summary.byMissingNode`), by scope (`summary.byScope`), per-network disagreements (`summary.networkSplit`), latest `/v1/info` per node (`info[label]`) |
+| `GET /api/summary` | `nodes` (labels, in order), `networks` (network to labels), `reference`, counts by cause, by missing node (`summary.byMissingNode`), by scope (`summary.byScope`), per-network disagreements (`summary.networkSplit`), latest `/v1/info` per node (`info[label]`, including `version`), `versions` (per network, the newest version its reachable nodes report) |
 | `GET /api/diffs?cause=unexplained&limit=200` | Diff rows with the full message JSON, shard, `presentNodes`, and `scope` |
 | `GET /api/stalls?limit=200` | Shard stall events, newest first |
-| `GET /api/node/LABEL?hours=24&limit=60` | One node by label: `name`, `network`, `reference` and `validator` flags, `latest` snapshot, `window` (samples, up, down, `uptimePct`, `worstDelay`, stall count over 1 to 168 hours), its `stalls` in the window, and `history` (newest samples, up to 1500). 404 for an unknown label. Operators use it to follow their own node; the Telegram bot's `/node LABEL` reads it |
+| `GET /api/node/LABEL?hours=24&limit=60` | One node by label: `name`, `network`, `reference` and `validator` flags, `version` (`current`, `latest` on its network, `behind`), `latest` snapshot, `window` (samples, up, down, `uptimePct`, `worstDelay`, stall count over 1 to 168 hours), its `stalls` in the window, and `history` (newest samples, up to 1500). 404 for an unknown label. Operators use it to follow their own node; the Telegram bot's `/node LABEL` reads it |
 | `GET /llms.txt` | Plain-text description of this deployment for agents and crawlers (llms.txt layout): node list from the running config, the endpoints above with absolute links, how to read scope and cause, and doc links |
 
 ## Moving to SpacetimeDB later

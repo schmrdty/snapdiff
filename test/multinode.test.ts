@@ -156,6 +156,7 @@ test("legacy database: 'a'/'b' rows are relabeled on open, the old CHECK is gone
   const st = (await store.listStalls({}))[0]!;
   assert.equal(st.side, "hypersnap");
   assert.equal(st.peer, null, "pre-multi-node stalls have no peer recorded");
+  assert.equal(st.scope, null, "and no scope");
   // The rebuilt table accepts any label now.
   await store.insertDiff({ hash: "0x02", fid: 1, shard: null, msgTimestamp: 1, presentOn: "ohsnap", missingOn: "snapchain", presentNodes: ["ohsnap"], scope: "network", missingNetwork: "snapchain", messageJson: "{}", firstSeen: 2 });
   assert.equal((await store.summary()).byCause.pending, 2);

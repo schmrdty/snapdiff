@@ -14,6 +14,7 @@ import {
   type Scope,
   type Side,
   type StallRow,
+  type StallScope,
   type Summary,
 } from "../types.js";
 
@@ -32,7 +33,8 @@ CREATE TABLE IF NOT EXISTS info_snapshots (
   shards_json           TEXT    NOT NULL,
   error                 TEXT,
   provider              TEXT,
-  note                  TEXT
+  note                  TEXT,
+  version               TEXT
 );
 CREATE INDEX IF NOT EXISTS info_side_at ON info_snapshots (side, at DESC);
 
@@ -78,6 +80,7 @@ CREATE TABLE IF NOT EXISTS stalls (
   shard_id          INTEGER NOT NULL,
   stuck_height      INTEGER NOT NULL,
   peer              TEXT,
+  scope             TEXT,
   peer_height_start INTEGER NOT NULL,
   peer_height_end   INTEGER,
   max_block_delay   INTEGER NOT NULL DEFAULT 0,
@@ -93,6 +96,8 @@ const MIGRATIONS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "diffs", column: "shard", ddl: "ALTER TABLE diffs ADD COLUMN shard INTEGER" },
   // Multi-node (v0.2): which peer a stall was measured against, and per-node cast counts.
   { table: "stalls", column: "peer", ddl: "ALTER TABLE stalls ADD COLUMN peer TEXT" },
+  // Stall scope (2026-11-12 fork): "node" or "network"; NULL on older rows.
+  { table: "stalls", column: "scope", ddl: "ALTER TABLE stalls ADD COLUMN scope TEXT" },
   { table: "scans", column: "messages_json", ddl: "ALTER TABLE scans ADD COLUMN messages_json TEXT" },
   // Network scope: which nodes had the cast, how far the difference reaches, and the missing
   // node's network. NULL on rows written before this existed.
@@ -102,6 +107,8 @@ const MIGRATIONS: Array<{ table: string; column: string; ddl: string }> = [
   // Provider failover: which provider answered, and why the primary did not.
   { table: "info_snapshots", column: "provider", ddl: "ALTER TABLE info_snapshots ADD COLUMN provider TEXT" },
   { table: "info_snapshots", column: "note", ddl: "ALTER TABLE info_snapshots ADD COLUMN note TEXT" },
+  // Version drift (2026-11-12): the node version from /v1/info, NULL before this existed.
+  { table: "info_snapshots", column: "version", ddl: "ALTER TABLE info_snapshots ADD COLUMN version TEXT" },
 ];
 
 /** Tables whose pre-multi-node CHECK pinned side values to 'a'/'b'. */
@@ -155,6 +162,7 @@ const toInfo = (r: Row): InfoSnapshot => ({
   numFidRegistrations: nn(r.num_fid_registrations),
   shards: JSON.parse(String(r.shards_json)) as InfoSnapshot["shards"],
   error: s(r.error),
+  version: s(r.version),
 });
 
 const toStall = (r: Row): StallRow => ({
@@ -163,6 +171,7 @@ const toStall = (r: Row): StallRow => ({
   shardId: n(r.shard_id),
   stuckHeight: n(r.stuck_height),
   peer: s(r.peer),
+  scope: r.scope === "node" || r.scope === "network" ? r.scope : null,
   peerHeightStart: n(r.peer_height_start),
   peerHeightEnd: nn(r.peer_height_end),
   maxBlockDelay: n(r.max_block_delay),
@@ -246,8 +255,8 @@ export class SqliteStore implements Store {
   async recordInfo(x: InfoSnapshot): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO info_snapshots (side, at, reachable, max_block_delay, num_shards, num_fid_registrations, shards_json, error, provider, note)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO info_snapshots (side, at, reachable, max_block_delay, num_shards, num_fid_registrations, shards_json, error, provider, note, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         x.side,
@@ -260,6 +269,7 @@ export class SqliteStore implements Store {
         x.error,
         x.provider,
         x.note,
+        x.version ?? null,
       );
   }
 
@@ -357,11 +367,15 @@ export class SqliteStore implements Store {
   async startStall(x: NewStall): Promise<number> {
     const res = this.db
       .prepare(
-        `INSERT INTO stalls (side, shard_id, stuck_height, peer, peer_height_start, started_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO stalls (side, shard_id, stuck_height, peer, scope, peer_height_start, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(x.side, x.shardId, x.stuckHeight, x.peer, x.peerHeightStart, x.startedAt);
+      .run(x.side, x.shardId, x.stuckHeight, x.peer, x.scope, x.peerHeightStart, x.startedAt);
     return Number(res.lastInsertRowid);
+  }
+
+  async setStallScope(id: number, scope: StallScope): Promise<void> {
+    this.db.prepare(`UPDATE stalls SET scope = ? WHERE id = ?`).run(scope, id);
   }
 
   async touchStall(id: number, maxBlockDelay: number): Promise<void> {

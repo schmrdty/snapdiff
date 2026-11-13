@@ -85,6 +85,7 @@
     {
       "side": "hyper-a",
       "shardId": 1,
+      "scope": "network",
       "peer": "snap-a",
       "startedAt": 90000,
       "endedAt": null

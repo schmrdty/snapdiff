@@ -19,7 +19,7 @@ test("stall list: one line per node and shard with its latest stall, 7 day count
   const store = new SqliteStore(":memory:");
   const now = Date.now();
   const h = 3_600_000;
-  const stall = (side: string, shardId: number, startedAt: number) => store.startStall({ side, shardId, stuckHeight: 100, peer: "snapchain", peerHeightStart: 110, startedAt });
+  const stall = (side: string, shardId: number, startedAt: number) => store.startStall({ side, shardId, stuckHeight: 100, scope: "node", peer: "snapchain", peerHeightStart: 110, startedAt });
   // ohsnap shard 2: three stalls today, the newest still open.
   await store.endStall(await stall("ohsnap", 2, now - 5 * h), now - 5 * h + 60_000, 170);
   await store.endStall(await stall("ohsnap", 2, now - 3 * h), now - 3 * h + 120_000, 180);

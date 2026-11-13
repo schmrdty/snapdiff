@@ -24,7 +24,7 @@ const HELP: Record<string, string> = {
   status: 'usage: /status. Every node (up or down, block delay, which provider answered) and every watched client.',
   fid: 'usage: /fid 123, digits only. Lists open diffs for that FID: which nodes have each cast and which are missing it.',
   node: 'usage: /node LABEL, the label as /status prints it. That node now, its last 24 h (checks, uptime, worst delay, stalls), shard heights, and its newest stall.',
-  subscribe: `usage: /subscribe LABEL, in a private chat with me. I message you when that node goes down, comes back, or a shard stalls or recovers (checked once a minute, one message per event type per 10 min). Up to ${MAX_LABELS_PER_CHAT} nodes per chat. /subscribe alone lists yours.`,
+  subscribe: `usage: /subscribe LABEL, in a private chat with me. I message you when that node goes down, comes back, a shard stalls or recovers, or its version falls behind the newest on its network (checked once a minute, one message per event type per 10 min). Up to ${MAX_LABELS_PER_CHAT} nodes per chat. /subscribe alone lists yours.`,
   unsubscribe: 'usage: /unsubscribe LABEL to stop following one node, /unsubscribe alone to stop all.',
   feedback: 'usage: /feedback your note. Goes to the operator. This is the only message text the bot keeps.',
   tip: 'usage: /tip. Shows where to send a tip toward node and server costs, once the operator has set one up.',
@@ -99,7 +99,7 @@ async function subscribeReply(command: string, chat: number, direct: boolean, la
   if (!nodes) return 'snapdiff api unavailable, try again in a minute';
   if (!nodes.includes(label)) return `${label}: not a listed node, /status lists them`;
   const r = subs.add(chat, label);
-  if (r === 'added') return `following ${label}: I will message you here when it goes down, comes back, or a shard stalls or recovers`;
+  if (r === 'added') return `following ${label}: I will message you here when it goes down, comes back, a shard stalls or recovers, or its version falls behind`;
   if (r === 'already') return `you already follow ${label}`;
   if (r === 'chat-full') return `you already follow ${MAX_LABELS_PER_CHAT} nodes, /unsubscribe one first`;
   return 'the bot has reached its subscriber limit for now, ask the operator';
@@ -125,7 +125,8 @@ async function pollEvents(): Promise<void> {
     for (const [label, next] of states) {
       const events = diffEvents(label, seen.get(label), next).filter(e => allow(quiet, e, now));
       seen.set(label, next);
-      for (const e of events) for (const chat of subs.chatsFor(label)) perChat.set(chat, [...(perChat.get(chat) ?? []), e.text]);
+      // Same text once per chat: a network-wide pause is worded without the label, so two followed nodes of one network produce one line.
+      for (const e of events) for (const chat of subs.chatsFor(label)) { const cur = perChat.get(chat) ?? []; if (!cur.includes(e.text)) perChat.set(chat, [...cur, e.text]); }
     }
     let sent = 0;
     for (const [chat, lines] of perChat) {

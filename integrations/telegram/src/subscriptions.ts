@@ -4,8 +4,11 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 //   - private chats only, so a group can never be flooded by one member's choice;
 //   - at most MAX_LABELS_PER_CHAT labels per chat and MAX_CHATS chats in total;
 //   - one poll a minute against the public API, and no poll at all while nobody subscribes;
-//   - four event kinds only (down, back up, shard stalled, stall ended), each silenced per
-//     label for QUIET_MS after it fires, and at most MAX_SENDS_PER_TICK messages per poll.
+//   - seven event kinds only (down, back up, shard stalled, stall ended, left behind when the
+//     rest of the network moves again, version behind, version current again), each silenced
+//     per label for QUIET_MS after it fires, and at most MAX_SENDS_PER_TICK messages per poll.
+//     A stall on every node of the network is worded as the network's pause, without the
+//     label, so a chat following two nodes of one network reads it once.
 // The file holds chat ids and labels, nothing else (no names, no text).
 export const MAX_LABELS_PER_CHAT = 3;
 export const MAX_CHATS = 25;
@@ -69,9 +72,26 @@ export class SubStore {
   }
 }
 
-export type NodeState = { network: string; reachable: boolean | null; error: string | null; stalledShards: number[] };
-export type EventKind = 'down' | 'up' | 'stall' | 'stall-ended';
+export type NodeState = { network: string; reachable: boolean | null; error: string | null; stalledShards: number[]; /** Subset of stalledShards whose stall is the whole network's (scope "network" on /api/stalls). */ networkStalledShards: number[]; version: string | null; latestVersion: string | null };
+export type EventKind = 'down' | 'up' | 'stall' | 'stall-ended' | 'left-behind' | 'behind' | 'current';
 export type Event = { label: string; kind: EventKind; text: string };
+
+/** Numeric dot-part order ("0.17.5" > "0.17.4"); the same rule as snapdiff's src/versions.ts, kept local because the bot is its own package. */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(/[.+-]/);
+  const pb = b.split(/[.+-]/);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? '0';
+    const y = pb[i] ?? '0';
+    const nx = /^\d+$/.test(x) ? Number(x) : null;
+    const ny = /^\d+$/.test(y) ? Number(y) : null;
+    if (nx !== null && ny !== null) { if (nx !== ny) return nx < ny ? -1 : 1; }
+    else if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+/** The node reports a version and it is older than the newest on its network. */
+export const isBehind = (s: NodeState): boolean => s.version !== null && s.latestVersion !== null && compareVersions(s.version, s.latestVersion) < 0;
 
 /** State transitions between two polls. The first observation of a label is a baseline and yields nothing. */
 export function diffEvents(label: string, prev: NodeState | undefined, next: NodeState): Event[] {
@@ -80,8 +100,15 @@ export function diffEvents(label: string, prev: NodeState | undefined, next: Nod
   const who = `${label} (${next.network})`;
   if (prev.reachable === true && next.reachable === false) out.push({ label, kind: 'down', text: `${who}: down${next.error ? `, ${next.error}` : ''}` });
   if (prev.reachable === false && next.reachable === true) out.push({ label, kind: 'up', text: `${who}: back up` });
-  for (const s of next.stalledShards) if (!prev.stalledShards.includes(s)) out.push({ label, kind: 'stall', text: `${who}: shard ${s} stalled` });
-  for (const s of prev.stalledShards) if (!next.stalledShards.includes(s)) out.push({ label, kind: 'stall-ended', text: `${who}: shard ${s} stall ended` });
+  const netWide = (st: NodeState, s: number) => st.networkStalledShards.includes(s);
+  for (const s of next.stalledShards) if (!prev.stalledShards.includes(s)) out.push({ label, kind: 'stall', text: netWide(next, s) ? `${next.network}: shard ${s} stopped on every node (network-wide pause)` : `${who}: shard ${s} stalled` });
+  for (const s of prev.stalledShards) if (!next.stalledShards.includes(s)) out.push({ label, kind: 'stall-ended', text: netWide(prev, s) ? `${next.network}: shard ${s} moving again on every node` : `${who}: shard ${s} stall ended` });
+  // The network recovered but this node did not: from here on it is the node's own stall.
+  for (const s of prev.networkStalledShards) if (next.stalledShards.includes(s) && !netWide(next, s)) out.push({ label, kind: 'left-behind', text: `${who}: still stalled on shard ${s} while the rest of ${next.network} moves again` });
+  // Version drift: fires when the node first reads behind (its own upgrade lagging, or a peer
+  // moving ahead), and once more when it is current again. Unknown versions never fire.
+  if (!isBehind(prev) && isBehind(next)) out.push({ label, kind: 'behind', text: `${who}: version ${next.version} is behind, newest on ${next.network} is ${next.latestVersion}` });
+  if (isBehind(prev) && !isBehind(next) && next.version !== null) out.push({ label, kind: 'current', text: `${who}: version ${next.version}, current again` });
   return out;
 }
 
