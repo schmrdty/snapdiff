@@ -1,5 +1,6 @@
 import type { Provider } from "./config.js";
 import type { HubMessage, InfoSnapshot, ShardInfo, Side } from "./types.js";
+import { FIRST_NATIVE_FID } from "./shard.js";
 
 /** Farcaster epoch: 2021-01-01T00:00:00Z, in unix seconds. */
 export const FARCASTER_EPOCH = 1_609_459_200;
@@ -49,6 +50,21 @@ export function isNotFound(status: number, body: unknown): boolean {
   if (typeof b.errCode === "string" && b.errCode.startsWith("not_found")) return true;
   const detail = [b.error_detail, b.details].filter((v): v is string => typeof v === "string").join(" ");
   return /\bNotFound\b|\bnot found\b/i.test(detail);
+}
+
+/**
+ * FIDs arrive as JSON numbers for legacy accounts and as decimal strings for native accounts
+ * (>= 2^32; Hypersnap emits those as strings so JavaScript clients do not round them). Both
+ * become a number here. Null for anything else, or past 2^53 (native FIDs count up from 2^32,
+ * so that limit is not a concern for a very long time).
+ */
+export function normalizeFid(v: unknown): number | null {
+  if (typeof v === "number") return Number.isSafeInteger(v) && v >= 0 ? v : null;
+  if (typeof v === "string" && /^\d{1,16}$/.test(v)) {
+    const n = Number(v);
+    return Number.isSafeInteger(n) ? n : null;
+  }
+  return null;
 }
 
 /** Message types `route_message` sends to `shardForFid(data.fid)`. Everything else is shard-0 state. */
@@ -271,7 +287,13 @@ export class HubClient {
       const { status, body } = await this.get(`/v1/castsByFid?${q.toString()}`);
       if (status !== 200) throw new HubError(`castsByFid fid=${fid} returned HTTP ${status}`, status);
       const b = body as { messages?: HubMessage[]; nextPageToken?: string };
-      out.push(...(b.messages ?? []));
+      for (const m of b.messages ?? []) {
+        // A native account's fid is a string on the wire. A message whose fid cannot be read
+        // is skipped rather than stored under a wrong number.
+        const fid = normalizeFid((m as { data?: { fid?: unknown } }).data?.fid);
+        if (fid === null) continue;
+        out.push(m.data.fid === fid ? m : { ...m, data: { ...m.data, fid } });
+      }
       pageToken = b.nextPageToken ?? "";
       if (pageToken === "") return out;
     }
@@ -295,22 +317,34 @@ export class HubClient {
     const out: Array<{ fid: number; type: string; shardIndex: number }> = [];
     for (const e of events) {
       if (e.type !== "HUB_EVENT_TYPE_MERGE_MESSAGE") continue;
-      const data = (e as { mergeMessageBody?: { message?: { data?: { fid?: number; type?: string } } } }).mergeMessageBody?.message?.data;
+      const data = (e as { mergeMessageBody?: { message?: { data?: { fid?: unknown; type?: string } } } }).mergeMessageBody?.message?.data;
       const si = (e as { shardIndex?: number }).shardIndex;
-      if (typeof data?.fid !== "number" || typeof data.type !== "string" || typeof si !== "number") continue;
+      const fid = normalizeFid(data?.fid);
+      if (fid === null || typeof data?.type !== "string" || typeof si !== "number") continue;
       if (!FID_HASH_ROUTED_TYPES.has(data.type)) continue;
-      out.push({ fid: data.fid, type: data.type, shardIndex: si });
+      out.push({ fid, type: data.type, shardIndex: si });
     }
     return out;
   }
 
   /**
-   * Whether this node has an ID registration for the FID. A FID registered on one network
-   * only (for example a Hypersnap on-network FID) returns false on the other network's node,
-   * and nothing it signs can ever appear there.
+   * Whether this node has a registration for the FID. A FID registered on one network only
+   * (a Hypersnap native account, or a Hypersnap on-network FID) returns false on the other
+   * network's node, and nothing it signs can ever appear there.
+   * Legacy FIDs (< 2^32) are looked up as ID_REGISTER on-chain events. Native FIDs (>= 2^32)
+   * have no on-chain event anywhere; they are looked up at /v1/nativeAccount, which answers
+   * HTTP 400 "NotFound" for an unknown one on Hypersnap and 404 on a Snapchain node (it does
+   * not serve the route), both read as false, so a native cast missing on Snapchain is
+   * relay_filtered: the shuttle never relays native accounts, by design.
    * true = registered here, false = unknown here, throws = could not tell.
    */
   async knowsFid(fid: number): Promise<boolean> {
+    if (fid >= FIRST_NATIVE_FID) {
+      const { status, body } = await this.get(`/v1/nativeAccount?fid=${fid}`);
+      if (status === 200) return true;
+      if (isNotFound(status, body)) return false;
+      throw new HubError(`nativeAccount fid=${fid} returned HTTP ${status}`, status);
+    }
     const q = new URLSearchParams({ fid: String(fid), event_type: "EVENT_TYPE_ID_REGISTER", pageSize: "1" });
     const { status, body } = await this.get(`/v1/onChainEventsByFid?${q.toString()}`);
     if (status === 200) {

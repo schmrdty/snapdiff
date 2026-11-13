@@ -76,13 +76,13 @@ Once Hypersnap moves to its own validators and its own mempool topic, nothing cr
 snapdiff handles the two filter rules separately:
 
 1. **Message type.** Set `RELAY_FILTERED_TYPES` to the comma-separated list of message type names the relay skips, once the relay code names them. Until then it is empty and the rule never fires.
-2. **FID origin.** Before calling a diff `unexplained`, snapdiff asks the missing node `/v1/onChainEventsByFid?event_type=EVENT_TYPE_ID_REGISTER` for the FID. No registration means nothing that FID signs can ever appear there, so the diff is `relay_filtered`. One request per FID per recheck run, cached. Set `FID_ORIGIN_CHECK=0` to disable.
+2. **FID origin.** Before calling a diff `unexplained`, snapdiff asks the missing node `/v1/onChainEventsByFid?event_type=EVENT_TYPE_ID_REGISTER` for the FID (for a native account, FID 2^32 and up, `/v1/nativeAccount?fid=` instead, since native accounts have no on-chain event; a Snapchain node does not serve that route, so a native cast missing on Snapchain is `relay_filtered`, which is the design: the shuttle never relays native accounts). Native FIDs arrive as decimal strings and are read as numbers; random sampling stays below `numFidRegistrations`, so a native account is watched only when listed in `WATCH_FIDS`. No registration means nothing that FID signs can ever appear there, so the diff is `relay_filtered`. One request per FID per recheck run, cached. Set `FID_ORIGIN_CHECK=0` to disable.
 
 Today, before the fork, both nodes follow the same validators and the same `mempool` topic, so there is no relay and these rules mostly stay quiet.
 
 ## Shard stalls
 
-Snapchain splits FIDs across data shards (`shard = SHA256(fid)[0..4] % numShards + 1`, the same rule in upstream Snapchain and Hypersnap). When a node cannot validate a shard's blocks, for example after a version cutover it has not shipped yet, that one shard stops advancing while the others keep going. Users on the stuck shard see their posts vanish from that node; users on the other shard notice nothing.
+Snapchain splits FIDs across data shards (`shard = SHA256(key)[0..4] % numShards + 1`, where `key` is the FID as 4 big-endian bytes; for a Hypersnap native account, FID 2^32 and up since the 2026-11-12 fork, it is four zero bytes then the FID as 8 big-endian bytes. The legacy rule is the same in upstream Snapchain and Hypersnap). When a node cannot validate a shard's blocks, for example after a version cutover it has not shipped yet, that one shard stops advancing while the others keep going. Users on the stuck shard see their posts vanish from that node; users on the other shard notice nothing.
 
 snapdiff records each of these as a stall event:
 
