@@ -292,6 +292,8 @@ ${nets
     // long in the last 7 days. A pair with more than one stall opens on click to list them all (<details>:
     // no script, because the page's only inline script is hash-pinned in the Caddy CSP).
     // Ryan, 2026-11-10: one busy node was filling the whole table.
+    // The first column is at least 210px and clips with an ellipsis: on a phone the 110px column let
+    // "castrater (network-wide)" run under the shard digit (Ryan's screenshot, 2026-11-13).
     const stallCells = (s: StallRow) =>
       `<td>${new Date(s.startedAt).toISOString().replace("T", " ").slice(0, 19)}Z</td><td>${s.endedAt === null ? `<span class="pill bad">ongoing ${dur(s.startedAt, now)}</span>` : dur(s.startedAt, s.endedAt)}</td><td>${s.stuckHeight.toLocaleString()}</td><td>${s.peer ? esc(label(s.peer)) : ""}</td><td>${(s.peerHeightEnd ?? s.peerHeightStart).toLocaleString()}</td><td>${s.maxBlockDelay}s</td>`;
     const stallsHtml = (rows: StallRow[]) => {
@@ -334,8 +336,8 @@ main{max-width:1100px;margin:0 auto;padding:20px 16px}h1{font-size:20px;margin:0
 .pill{font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid currentColor}.ok{color:var(--ok)}.bad,.bad-text{color:var(--bad)}.warn{color:var(--warn)}
 table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 th{font-weight:600;color:var(--muted)}.mono{font-family:ui-monospace,monospace}.scroll{overflow:auto;max-height:420px}
-.stalls{min-width:940px}.stalls .hdr,.stalls .row,.stalls summary{display:grid;grid-template-columns:minmax(110px,1.4fr) 44px 150px 118px 96px minmax(90px,1fr) 96px 80px 122px;gap:0 8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--line);font-size:14px;white-space:nowrap}
-.stalls .hdr{font-weight:600;color:var(--muted)}.stalls .row>span:first-child,.stalls summary>span:first-child{padding-left:1.2em;position:relative}
+.stalls{min-width:1040px}.stalls .hdr,.stalls .row,.stalls summary{display:grid;grid-template-columns:minmax(210px,1.4fr) 44px 150px 118px 96px minmax(90px,1fr) 96px 80px 122px;gap:0 8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--line);font-size:14px;white-space:nowrap}
+.stalls .hdr{font-weight:600;color:var(--muted)}.stalls .row>span:first-child,.stalls summary>span:first-child{padding-left:1.2em;position:relative;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .stalls summary{cursor:pointer;list-style:none}.stalls summary::-webkit-details-marker{display:none}.stalls summary>span:first-child::before{content:"\\25B8";position:absolute;left:0;color:var(--muted)}.stalls details[open]>summary>span:first-child::before{content:"\\25BE"}
 .stalls details>table{width:auto;margin:4px 8px 10px 2.2em}.stalls details>table td,.stalls details>table th{border-bottom:1px solid var(--line)}
 td.text{white-space:normal;min-width:240px;max-width:460px}
