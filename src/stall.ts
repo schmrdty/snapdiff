@@ -17,7 +17,8 @@ import type { InfoSnapshot, Side, StallScope } from "./types.js";
  *   shard (or it is the only node of its network). The network stopped deciding blocks:
  *   on 2026-11-12 23:36 UTC all seven hypersnap nodes stopped at one height for 85 s when
  *   the validators lost quorum. Recorded once per node so each node's history is complete;
- *   the dashboard and the bot collapse the rows into one network-wide line. The peer is then
+ *   the dashboard header pill and the bot collapse the open ones into one network-wide line;
+ *   the stall table keeps one row per node, suffixed "(network-wide)". The peer is then
  *   the healthiest node on any other network, kept as evidence that time passed. When no
  *   node anywhere is healthy nothing is recorded: that is a clock or probe problem.
  */
