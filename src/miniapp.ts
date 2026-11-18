@@ -9,6 +9,9 @@
 //   3. sdk.actions.ready() once the page is up (static/miniapp.mjs, vendored SDK bundle), or
 //      the host keeps its splash screen forever.
 // Images are static PNGs under /static, generated in-repo; nothing is fetched from outside.
+// Field limits come from the manifest schema in farcasterxyz/miniapps (packages/miniapp-core/
+// src/schemas): name 32, subtitle 30, description 170, ogTitle 30, ogDescription 100, five
+// tags of 20 characters without spaces, no emoji; the manifest tool rejects anything longer.
 import type { Config } from "./config.js";
 
 export interface MiniAppAssociation {
@@ -62,14 +65,14 @@ export function manifestJson(cfg: Pick<Config, "miniapp">, origin: string): Reco
       homeUrl: `${origin}/`,
       splashImageUrl: `${origin}/static/splash.png`,
       splashBackgroundColor: "#8a63d2",
-      subtitle: "Snapchain and Hypersnap node health",
+      subtitle: "Snapchain and Hypersnap nodes",
       description: "Read-only dashboard: node liveness, versions, shard stalls, cast relay comparison between the networks, and the testnet cast explorer.",
       primaryCategory: "developer-tools",
       tags: ["farcaster", "hypersnap", "snapchain", "nodes", "monitoring"],
-      heroImageUrl: `${origin}/static/embed.png`,
+      heroImageUrl: `${origin}/static/og.png`,
       ogTitle: cfg.miniapp.name,
       ogDescription: "Snapchain and Hypersnap node health",
-      ogImageUrl: `${origin}/static/embed.png`,
+      ogImageUrl: `${origin}/static/og.png`,
       noindex: false,
     },
   };

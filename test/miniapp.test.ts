@@ -31,6 +31,10 @@ test("embed and manifest JSON follow the spec shapes", () => {
   assert.deepEqual(m.accountAssociation, cfg.miniapp.association);
   assert.equal(m.miniapp["homeUrl"], "https://s.test/");
   assert.equal(m.miniapp["iconUrl"], "https://s.test/static/icon.png");
+  // Limits from the manifest schema (farcasterxyz/miniapps, miniapp-core/src/schemas/manifest.ts).
+  assert.ok(String(m.miniapp["name"]).length <= 32 && String(m.miniapp["subtitle"]).length <= 30 && String(m.miniapp["description"]).length <= 170 && String(m.miniapp["ogTitle"]).length <= 30 && String(m.miniapp["ogDescription"]).length <= 100);
+  assert.ok((m.miniapp["tags"] as string[]).length <= 5 && (m.miniapp["tags"] as string[]).every((tg) => tg.length <= 20 && !/\s/.test(tg)));
+  assert.equal(m.miniapp["ogImageUrl"], "https://s.test/static/og.png");
   assert.equal(manifestJson({ miniapp: loadMiniApp({}) }, "https://s.test"), null);
 });
 
@@ -72,6 +76,9 @@ test("static images have the shapes the spec asks for: square icon, square splas
   const icon = size("icon.png");
   const splash = size("splash.png");
   const embed = size("embed.png");
+  const og = size("og.png");
+  assert.equal(og.w, 1200);
+  assert.equal(og.h, 630);
   assert.equal(icon.w, icon.h);
   assert.ok(icon.w >= 1024);
   assert.equal(splash.w, splash.h);
