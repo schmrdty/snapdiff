@@ -4,8 +4,9 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 //   - private chats only, so a group can never be flooded by one member's choice;
 //   - at most MAX_LABELS_PER_CHAT labels per chat and MAX_CHATS chats in total;
 //   - one poll a minute against the public API, and no poll at all while nobody subscribes;
-//   - seven event kinds only (down, back up, shard stalled, stall ended, left behind when the
-//     rest of the network moves again, version behind, version current again), each silenced
+//   - eight event kinds only (down, back up, shard stalled, stall ended, left behind when the
+//     rest of the network moves again, version behind, version current again, release
+//     published while the node runs something older), each silenced
 //     per label for QUIET_MS after it fires, and at most MAX_SENDS_PER_TICK messages per poll.
 //     A stall on every node of the network is worded as the network's pause, without the
 //     label, so a chat following two nodes of one network reads it once.
@@ -72,8 +73,8 @@ export class SubStore {
   }
 }
 
-export type NodeState = { network: string; reachable: boolean | null; error: string | null; stalledShards: number[]; /** Subset of stalledShards whose stall is the whole network's (scope "network" on /api/stalls). */ networkStalledShards: number[]; version: string | null; latestVersion: string | null };
-export type EventKind = 'down' | 'up' | 'stall' | 'stall-ended' | 'left-behind' | 'behind' | 'current';
+export type NodeState = { network: string; reachable: boolean | null; error: string | null; stalledShards: number[]; /** Subset of stalledShards whose stall is the whole network's (scope "network" on /api/stalls). */ networkStalledShards: number[]; version: string | null; latestVersion: string | null; /** Newest version the project has published for this network (/api/summary releases), null when unknown or off. */ published: string | null };
+export type EventKind = 'down' | 'up' | 'stall' | 'stall-ended' | 'left-behind' | 'behind' | 'current' | 'release';
 export type Event = { label: string; kind: EventKind; text: string };
 
 /** Numeric dot-part order ("0.17.5" > "0.17.4"); the same rule as snapdiff's src/versions.ts, kept local because the bot is its own package. */
@@ -112,6 +113,11 @@ export function diffEvents(label: string, prev: NodeState | undefined, next: Nod
   if (!isBehind(prev) && isBehind(next)) out.push({ label, kind: 'behind', text: `${who}: version ${next.version} is behind, newest on ${next.network} is ${next.latestVersion}` });
   else if (isBehind(prev) && isBehind(next) && (prev.version !== next.version || prev.latestVersion !== next.latestVersion)) out.push({ label, kind: 'behind', text: `${who}: version ${next.version} is still behind, newest on ${next.network} is now ${next.latestVersion}` });
   if (isBehind(prev) && !isBehind(next) && next.version !== null) out.push({ label, kind: 'current', text: `${who}: version ${next.version}, current again` });
+  // Release published: the project pushed a newer version than this node runs. Fires once per
+  // new published version, the earlier signal than "behind", which waits for a peer to upgrade.
+  // Ryan, 2026-11-14: four patches in one afternoon and nothing said so until a peer pulled each.
+  // A node already on the published version hears nothing; an unknown node version still fires.
+  if (next.published !== null && (prev.published === null || compareVersions(next.published, prev.published) > 0) && (next.version === null || compareVersions(next.version, next.published) < 0)) out.push({ label, kind: 'release', text: `${next.network} ${next.published} published, ${label} runs ${next.version ?? 'an unknown version'}` });
   return out;
 }
 

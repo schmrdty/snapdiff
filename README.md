@@ -49,6 +49,8 @@ Run each node on its own machine (both default to ports 3381-3383, and a Snapcha
 
 To compare three or more nodes, list them in `NODES` and give each its own `NODE_<LABEL>_URL`, `NODE_<LABEL>_NETWORK` (`snapchain` or `hypersnap`), and `NODE_<LABEL>_HEADERS` when a key is needed. The labels become the node ids in the database, the dashboard, and the API; the network tag is what lets snapdiff tell "one Hypersnap node is behind" from "Hypersnap and Snapchain disagree". Add `NODE_<LABEL>_PRIVATE=1` for a node whose address should not be published (a bare IP, for example): the page, the API, and every note then name it by label only, and labels may contain dots so such a node can be called `hypersnape.node`. `NODE_<LABEL>_NAME` gives a node a display name on the page without changing its id, `NODE_<LABEL>_VALIDATOR=1` labels its card, `/api/node` and the bot "validator" instead of "node", and `REFERENCE_NODE_2` names the reference of the second network (its card is tagged, and `presentOn` falls back to it). Example and migration notes in `docs/MULTI-NODE.md`.
 
+A network whose name contains `testnet` (for example `hypersnap-testnet`) is shown on the dashboard's Testnet tab (`/?net=testnet`) and left out of the Mainnet tab, its stall rows included. Its nodes are polled for health, versions and stalls but never take part in the cast scan or the rechecks (mainnet FIDs do not exist there). The API routes return every network regardless. Testnet cards use their own color (`--tn`, a brighter purple than Hypersnap's `--fc`). Mark a validator with `NODE_<LABEL>_VALIDATOR=1`. Under the testnet node cards a cast explorer lists the newest 100 casts on that network (every FID from `/v1/fids` on each data shard, one page of `castsByFid` newest first, refreshed every `TESTNET_FEED_INTERVAL_SEC`, default 30; also at `GET /api/testnet/casts`). It reads the network's reference node and is sized for hundreds of accounts; past that it should move to the events stream.
+
 ## How it works
 
 | Loop | Default interval | What it does |
@@ -120,11 +122,12 @@ A one-sided fetch failure never creates a diff. The FID is skipped for that scan
 
 | Route | Returns |
 |---|---|
-| `GET /` | Dashboard (auto-refresh 30 s) |
-| `GET /api/summary` | `nodes` (labels, in order), `networks` (network to labels), `reference`, counts by cause, by missing node (`summary.byMissingNode`), by scope (`summary.byScope`), per-network disagreements (`summary.networkSplit`), latest `/v1/info` per node (`info[label]`, including `version`), `versions` (per network, the newest version its reachable nodes report) |
+| `GET /` | Dashboard, Mainnet tab (auto-refresh 30 s) |
+| `GET /?net=testnet` | Dashboard, Testnet tab: nodes of every network whose name contains `testnet` (present only when one is configured) |
+| `GET /api/summary` | `nodes` (labels, in order), `networks` (network to labels), `reference`, counts by cause, by missing node (`summary.byMissingNode`), by scope (`summary.byScope`), per-network disagreements (`summary.networkSplit`), latest `/v1/info` per node (`info[label]`, including `version`), `versions` (per network, the newest version its reachable nodes report), `releases` (per network, the newest version the project has published: `version`, `publishedAt`, `checkedAt`, `error`; `{}` when the feed is off) |
 | `GET /api/diffs?cause=unexplained&limit=200` | Diff rows with the full message JSON, shard, `presentNodes`, and `scope` |
 | `GET /api/stalls?limit=200` | Shard stall events, newest first |
-| `GET /api/node/LABEL?hours=24&limit=60` | One node by label: `name`, `network`, `reference` and `validator` flags, `version` (`current`, `latest` on its network, `behind`), `latest` snapshot, `window` (samples, up, down, `uptimePct`, `worstDelay`, stall count over 1 to 168 hours), its `stalls` in the window, and `history` (newest samples, up to 1500). 404 for an unknown label. Operators use it to follow their own node; the Telegram bot's `/node LABEL` reads it |
+| `GET /api/node/LABEL?hours=24&limit=60` | One node by label: `name`, `network`, `reference` and `validator` flags, `version` (`current`, `latest` on its network, `behind`), `release` (newest published on its network, or null), `latest` snapshot, `window` (samples, up, down, `uptimePct`, `worstDelay`, stall count over 1 to 168 hours), its `stalls` in the window, and `history` (newest samples, up to 1500). 404 for an unknown label. Operators use it to follow their own node; the Telegram bot's `/node LABEL` reads it |
 | `GET /llms.txt` | Plain-text description of this deployment for agents and crawlers (llms.txt layout): node list from the running config, the endpoints above with absolute links, how to read scope and cause, and doc links |
 
 ## Moving to SpacetimeDB later
@@ -149,9 +152,27 @@ On a deployed server keep the real list outside the deployed tree (for example i
 
 See `.env.example`. Every value has a default. Sizing the net: with the defaults (24-hour lookback, 50 random FIDs) most scans see zero casts, because most of the 3.3 million FIDs are dormant. `LOOKBACK_HOURS=168` and `SAMPLE_SIZE=200` plus a watchlist give every scan something to compare, at the cost of more API calls (`CONCURRENCY` throttles them).
 
+## Published releases
+
+Each node card compares the node to two bars. `behind X` (red) means a reachable node on the same network already runs X. `X published` (amber) means the project has pushed X to its image registry and no node on the network runs it yet, so this is the earlier of the two. The feed is the Docker Hub tag list of each network's image (`src/releases.ts`), fetched from the server every `RELEASE_INTERVAL_MIN` minutes; the only thing read from a response is a numeric tag and its push time. `RELEASE_FEED_<NETWORK>` overrides the URL or turns a network off (`off`). Hypersnap has no GitHub releases for its 0.17.x line, so the registry is the release list.
+
 ## Client health (optional)
 
 Shows whether the apps people use on each network (Vibeshift, Quilcast, Quorum, and others) report themselves healthy, with a link to each one's site. Off unless `CLIENT_HEALTH_FILE` names a config; every URL is yours, nothing from a response ever becomes a link or text on the page. Details, config format, and the safety contract: `docs/CLIENT-HEALTH.md`.
+
+## Mini App (Farcaster and Hypersnap clients)
+
+The dashboard opens inside Farcaster and Hypersnap clients as a Mini App with no extra
+features: every page carries an `fc:miniapp` embed tag (3:2 card, "Open snapdiff" button,
+the Testnet tab when shared from it), `/static/miniapp.mjs` calls the SDK's `ready()` so the
+host drops its splash screen, and `/.well-known/farcaster.json` serves the manifest. The SDK
+is the vendored `@farcaster/miniapp-sdk` 0.4.0 bundle in `static/`, served from this origin,
+so the CSP stays `'self'` plus the pager hash; `frame-ancestors` is open because clients
+embed Mini Apps in iframes and the page has no actions to abuse. Setup: sign the domain once
+with the Farcaster manifest tool (link in `.env.example`), put the three values in `.env` as
+`MINIAPP_ASSOCIATION_HEADER`, `_PAYLOAD`, `_SIGNATURE`, restart, then
+`curl -s https://<domain>/.well-known/farcaster.json` and preview the URL in a client's
+developer tools. Until then the manifest route answers 404 and the rest already works.
 
 ## Deploying
 

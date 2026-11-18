@@ -1,4 +1,4 @@
-import type { Config } from "./config.js";
+import { scanNodes, type Config } from "./config.js";
 import type { HubClient } from "./hub.js";
 import type { Store } from "./store/store.js";
 import type { HubMessage, InfoSnapshot, ScanRun, Side } from "./types.js";
@@ -18,6 +18,8 @@ export interface Deps {
 
 const clock = (d: Deps) => (d.now ?? Date.now)();
 const labels = (d: Deps): Side[] => d.cfg.nodes.map((n) => n.label);
+// Loops 2 and 3 compare mainnets only; testnet nodes are health-polled (loop 1) and nothing else.
+const scanLabels = (d: Deps): Side[] => scanNodes(d.cfg).map((n) => n.label);
 const hub = (d: Deps, side: Side): HubClient => {
   const h = d.hubs[side];
   if (h === undefined) throw new Error(`no hub client for node "${side}"`);
@@ -138,14 +140,14 @@ export async function scanOnce(d: Deps): Promise<ScanRun> {
     startedAt,
     finishedAt: 0,
     fidsScanned: 0,
-    messagesByNode: Object.fromEntries(labels(d).map((l) => [l, 0])),
+    messagesByNode: Object.fromEntries(scanLabels(d).map((l) => [l, 0])),
     reference: ref,
     newDiffs: 0,
     errors: 0,
   };
 
   // Data-shard count comes from /v1/info. If the nodes disagree, shard tagging is unsafe.
-  const infos = await Promise.all(labels(d).map((l) => d.store.latestInfo(l)));
+  const infos = await Promise.all(scanLabels(d).map((l) => d.store.latestInfo(l)));
   const counts = infos.map((i) => i?.numShards).filter((v): v is number => typeof v === "number");
   const numShards = counts.length > 0 && counts.every((c) => c === counts[0]) ? (counts[0] as number) : null;
   if (numShards === null) d.log(`[scan] numShards unknown or mismatched (${infos.map((i) => String(i?.numShards)).join(" vs ")}); diffs get no shard tag`);
@@ -153,7 +155,7 @@ export async function scanOnce(d: Deps): Promise<ScanRun> {
 
   await pool(fids, d.cfg.concurrency, async (fid) => {
     const results = await Promise.all(
-      labels(d).map(async (l): Promise<[Side, HubMessage[] | null]> => {
+      scanLabels(d).map(async (l): Promise<[Side, HubMessage[] | null]> => {
         try {
           return [l, await hub(d, l).castsByFid(fid, start, stop, d.cfg.maxPagesPerFid)];
         } catch (e) {
@@ -190,7 +192,7 @@ export async function scanOnce(d: Deps): Promise<ScanRun> {
 
   run.finishedAt = clock(d);
   await d.store.recordScan(run);
-  const perNode = labels(d).map((l) => `${l}=${run.messagesByNode[l] ?? 0}`).join(" ");
+  const perNode = scanLabels(d).map((l) => `${l}=${run.messagesByNode[l] ?? 0}`).join(" ");
   d.log(`[scan] ${run.fidsScanned}/${fids.length} fids, casts ${perNode}, ${run.newDiffs} new diffs, ${run.errors} errors`);
   return run;
 }
@@ -200,7 +202,7 @@ export async function recheckOnce(d: Deps): Promise<number> {
   const now = clock(d);
   const due = await d.store.dueForRecheck(now, d.cfg.recheckAfterMs, d.cfg.recheckWindowMs, 200);
   const latest = new Map<Side, InfoSnapshot | null>();
-  for (const l of labels(d)) latest.set(l, await d.store.latestInfo(l));
+  for (const l of scanLabels(d)) latest.set(l, await d.store.latestInfo(l));
 
   // FID registrations don't change within a run, so ask each node once per FID.
   const fidKnown = new Map<string, boolean | null>();

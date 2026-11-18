@@ -300,6 +300,40 @@ export class HubClient {
     throw new HubError(`castsByFid fid=${fid} exceeded ${maxPages} pages; raise MAX_PAGES_PER_FID`, null);
   }
 
+  /** Every registered FID on one data shard (native FIDs included), paged; for the testnet feed. */
+  async fids(shardId: number, pageSize: number, maxPages: number): Promise<number[]> {
+    const out: number[] = [];
+    let pageToken = "";
+    for (let page = 0; page < maxPages; page++) {
+      const q = new URLSearchParams({ shard_id: String(shardId), pageSize: String(pageSize) });
+      if (pageToken !== "") q.set("pageToken", pageToken);
+      const { status, body } = await this.get(`/v1/fids?${q.toString()}`);
+      if (status !== 200) throw new HubError(`fids shard=${shardId} returned HTTP ${status}`, status);
+      const b = body as { fids?: unknown[]; nextPageToken?: string };
+      for (const f of b.fids ?? []) {
+        const n = normalizeFid(f);
+        if (n !== null) out.push(n);
+      }
+      pageToken = b.nextPageToken ?? "";
+      if (pageToken === "") break;
+    }
+    return out;
+  }
+
+  /** One page of a FID's casts, newest first; for the testnet feed. */
+  async recentCasts(fid: number, pageSize: number): Promise<HubMessage[]> {
+    const q = new URLSearchParams({ fid: String(fid), pageSize: String(pageSize), reverse: "true" });
+    const { status, body } = await this.get(`/v1/castsByFid?${q.toString()}`);
+    if (status !== 200) throw new HubError(`castsByFid fid=${fid} returned HTTP ${status}`, status);
+    const out: HubMessage[] = [];
+    for (const m of (body as { messages?: HubMessage[] }).messages ?? []) {
+      const f = normalizeFid((m as { data?: { fid?: unknown } }).data?.fid);
+      if (f === null) continue;
+      out.push(m.data.fid === f ? m : { ...m, data: { ...m.data, fid: f } });
+    }
+    return out;
+  }
+
   /**
    * Recent merge events on one shard: (fid, type, shardIndex), newest first.
    * Only message types that `route_message` routes by FID hash are returned. Storage lends and

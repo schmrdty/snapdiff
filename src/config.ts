@@ -1,4 +1,6 @@
+import { loadMiniApp, type MiniAppConfig } from "./miniapp.js";
 import { readFileSync, existsSync } from "node:fs";
+import { DEFAULT_RELEASE_FEEDS } from "./releases.js";
 
 export interface Provider {
   url: string;
@@ -107,6 +109,17 @@ export interface Config {
   /** Path to the clients JSON (docs/CLIENT-HEALTH.md). Empty = feature off. */
   clientHealthFile: string;
   clientHealthIntervalMs: number;
+  /**
+   * Release feed per network (src/releases.ts): a Docker Hub tag-list URL whose newest
+   * numeric tag is the newest published version. Networks absent here are not watched.
+   * RELEASE_FEED_<NETWORK> overrides the built-in URL or turns a network off with "off".
+   */
+  releaseFeeds: Record<string, string>;
+  releaseIntervalMs: number;
+  /** Testnet cast explorer refresh (src/testnet-feed.ts); only runs when a testnet network is configured. */
+  testnetFeedIntervalMs: number;
+  /** Farcaster Mini App surface (src/miniapp.ts): name and the signed domain association. */
+  miniapp: MiniAppConfig;
 }
 
 const num = (name: string, fallback: number): number => {
@@ -301,13 +314,47 @@ export function loadConfig(): Config {
     providerRetryMs: num("PROVIDER_RETRY_MIN", 10) * min,
     clientHealthFile: str("CLIENT_HEALTH_FILE", ""),
     clientHealthIntervalMs: num("CLIENT_HEALTH_INTERVAL_SEC", 60) * 1000,
+    releaseFeeds: loadReleaseFeeds(nodes.map((n) => n.network)),
+    releaseIntervalMs: num("RELEASE_INTERVAL_MIN", 10) * min,
+    testnetFeedIntervalMs: num("TESTNET_FEED_INTERVAL_SEC", 30) * 1000,
+    miniapp: loadMiniApp(),
   };
+}
+
+/**
+ * One feed URL per configured network: RELEASE_FEED_<NETWORK> when set (an https URL, or
+ * "off" to skip that network), else the built-in Docker Hub list for networks we know. A
+ * network with neither is left out, so the dashboard simply shows no release for it.
+ */
+export function loadReleaseFeeds(networkNames: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const network of [...new Set(networkNames)]) {
+    const raw = str(`RELEASE_FEED_${envKeyFor(network)}`, "");
+    if (raw.toLowerCase() === "off") continue;
+    const url = raw !== "" ? raw : DEFAULT_RELEASE_FEEDS[network];
+    if (url === undefined) continue;
+    if (!/^https:\/\//.test(url)) throw new Error(`RELEASE_FEED_${envKeyFor(network)} must be an https URL or "off"`);
+    out[network] = url;
+  }
+  return out;
 }
 
 /** Every node except the reference, in config order. */
 export const comparedNodes = (cfg: Pick<Config, "nodes" | "reference">): NodeConfig[] => cfg.nodes.filter((n) => n.label !== cfg.reference);
 
 /** Networks in first-seen config order, each with the labels of its nodes. */
+/**
+ * A network whose name contains "testnet" is a test chain: its nodes are polled for health,
+ * versions and shard stalls like any other, but they never take part in the cast relay scan
+ * or the rechecks, and the dashboard shows them on their own tab. Mainnet FIDs do not exist
+ * on a testnet, so scanning one would count every mainnet cast as missing there (seen live
+ * 2026-11-17: 390 false diffs in one scan).
+ */
+export const isTestnetNetwork = (network: string): boolean => /testnet/i.test(network);
+
+/** The nodes the relay scan compares: every configured node that is not on a testnet. */
+export const scanNodes = (cfg: Pick<Config, "nodes">): NodeConfig[] => cfg.nodes.filter((n) => !isTestnetNetwork(n.network));
+
 export function networks(cfg: Pick<Config, "nodes">): Array<{ network: string; labels: string[] }> {
   const out: Array<{ network: string; labels: string[] }> = [];
   for (const n of cfg.nodes) {

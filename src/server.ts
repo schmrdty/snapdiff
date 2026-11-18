@@ -1,11 +1,15 @@
 import { Hono } from "hono";
+import { serveStatic } from "@hono/node-server/serve-static";
+import { embedJson, manifestJson } from "./miniapp.js";
 import { CLIENT_STATUSES, type ClientHealth, type ClientStatus } from "./clients.js";
-import { networks, nodeOf, type Config } from "./config.js";
+import { networks, nodeOf, type Config, isTestnetNetwork } from "./config.js";
 import { hostOf } from "./hub.js";
 import { llmsTxt } from "./llms.js";
+import type { ReleaseState } from "./releases.js";
+import type { FeedSnapshot } from "./testnet-feed.js";
 import type { Store } from "./store/store.js";
 import { CAUSES, type Cause, type DiffRow, type InfoSnapshot, type Side, type StallRow } from "./types.js";
-import { latestVersions, versionView } from "./versions.js";
+import { compareVersions, latestVersions, versionView } from "./versions.js";
 
 const esc = (s: string): string =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
@@ -45,7 +49,7 @@ const CAUSE_HELP: Record<Cause, string> = {
 
 const isCause = (v: string | undefined): v is Cause => v !== undefined && (CAUSES as readonly string[]).includes(v);
 
-export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth[]): Hono {
+export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth[], releases?: () => Record<string, ReleaseState>, feed?: () => Record<string, FeedSnapshot>): Hono {
   const app = new Hono();
   // Node ids in the database ARE the configured labels; NODE_<LABEL>_NAME only changes how a
   // label is printed on this page (cards, stall and split tables). The API keeps the ids.
@@ -64,6 +68,11 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
   };
   const nodeLabels = cfg.nodes.map((n) => n.label);
   const nets = networks(cfg);
+  // A testnet network (src/config.ts isTestnetNetwork) belongs to the page's Testnet tab (see
+  // GET /). The API routes below keep every network; only the page splits them.
+  const isTestnet = isTestnetNetwork;
+  const allNets = nets;
+  const hasTestnet = allNets.some((n) => isTestnet(n.network));
   const networkMap = Object.fromEntries(nets.map((x) => [x.network, x.labels]));
   const latestInfos = async (): Promise<Record<Side, InfoSnapshot | null>> =>
     Object.fromEntries(await Promise.all(nodeLabels.map(async (l) => [l, await store.latestInfo(l)] as const)));
@@ -71,8 +80,9 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
   app.get("/api/summary", async (c) => {
     const [summary, info] = await Promise.all([store.summary(), latestInfos()]);
     // versions[network]: newest version its reachable nodes report (src/versions.ts); the bot
-    // compares info[label].version against it to say "behind".
-    return c.json({ nodes: nodeLabels, networks: networkMap, reference: cfg.reference, references: cfg.references, summary, info, versions: latestVersions(networkMap, info) });
+    // compares info[label].version against it to say "behind". releases[network]: newest
+    // version the project has published (src/releases.ts), the earlier signal; {} when off.
+    return c.json({ nodes: nodeLabels, networks: networkMap, reference: cfg.reference, references: cfg.references, summary, info, versions: latestVersions(networkMap, info), releases: releases?.() ?? {} });
   });
 
   app.get("/api/diffs", async (c) => {
@@ -85,6 +95,9 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
 
   // Client health (docs/CLIENT-HEALTH.md): latest status per configured client, or [] when off.
   app.get("/api/clients", (c) => c.json({ clients: clients?.() ?? [] }));
+
+  // Testnet cast explorer (src/testnet-feed.ts): newest casts per testnet network, {} when off.
+  app.get("/api/testnet/casts", (c) => c.json({ feeds: feed?.() ?? {} }));
 
   app.get("/api/stalls", async (c) => {
     const limit = Math.min(Number(c.req.query("limit") ?? 200) || 200, 5000);
@@ -118,6 +131,8 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       reference: Object.values(cfg.references).includes(label),
       validator: node.validator === true,
       version: versionView(latest?.version, latestVersions(networkMap, infos)[node.network] ?? null),
+      // Newest published version on this node's network (src/releases.ts), null when unknown or off.
+      release: releases?.()[node.network] ?? null,
       latest,
       window: {
         hours,
@@ -140,6 +155,26 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     });
   });
 
+  // Public origin from the proxy headers when behind Caddy, else from the request (same rule
+  // as /llms.txt): the Mini App manifest and embed need absolute URLs on the real host name.
+  const originOf = (c: { req: { url: string; header: (n: string) => string | undefined } }): string => {
+    const url = new URL(c.req.url);
+    const proto = c.req.header("x-forwarded-proto") ?? url.protocol.replace(":", "");
+    const host = c.req.header("x-forwarded-host") ?? c.req.header("host") ?? url.host;
+    return `${proto}://${host}`;
+  };
+
+  // Mini App files (src/miniapp.ts): the ready() module, the vendored SDK, the three images.
+  // Only this directory is served; it holds nothing generated at runtime.
+  app.use("/static/*", serveStatic({ root: "./", rewriteRequestPath: (p) => p }));
+
+  // Mini App manifest: 404 with a plain reason until the operator sets the association.
+  app.get("/.well-known/farcaster.json", (c) => {
+    const m = manifestJson(cfg, originOf(c));
+    if (m === null) return c.text("Mini App manifest is off: MINIAPP_ASSOCIATION_* not set", 404);
+    return c.json(m);
+  });
+
   // Plain-text description for agents (src/llms.ts). Origin from the proxy headers when
   // behind Caddy, else from the request, so the links are absolute and correct in both setups.
   app.get("/llms.txt", (c) => {
@@ -151,6 +186,16 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
 
   app.get("/", async (c) => {
     const now = Date.now();
+    // Two views of one page. A network whose name contains "testnet" renders on the Testnet
+    // tab (/?net=testnet) and nowhere else; everything else is the Mainnet tab (/). The
+    // mainnet-only sections (relay counts, split, unexplained, pending) stay off the testnet
+    // tab because the relay compares the two mainnets. Tabs are plain links, not script: the
+    // Caddy CSP pins the page's single inline script by hash (test/csp.test.ts). Ryan,
+    // 2026-11-17: testnet cards inside the mainnet overview were confusing.
+    const view: "mainnet" | "testnet" = hasTestnet && c.req.query("net") === "testnet" ? "testnet" : "mainnet";
+    const nets = allNets.filter((n) => isTestnet(n.network) === (view === "testnet"));
+    const nodeLabels = nets.flatMap((n) => n.labels);
+    const inView = new Set<Side>(nodeLabels);
     const [summary, infos, unexplained, pending, recentStalls, openStalls] = await Promise.all([
       store.summary(),
       latestInfos(),
@@ -160,7 +205,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       store.openStalls(),
     ]);
     // Newest 2000 plus anything still open beyond them, each once, newest first.
-    const stalls = [...recentStalls, ...openStalls.filter((o) => !recentStalls.some((r) => r.id === o.id))].sort((a, b) => b.startedAt - a.startedAt);
+    const stalls = [...recentStalls, ...openStalls.filter((o) => !recentStalls.some((r) => r.id === o.id))].filter((s) => inView.has(s.side)).sort((a, b) => b.startedAt - a.startedAt);
     const openStall = (side: Side, shardId: number) => stalls.some((s) => s.side === side && s.shardId === shardId && s.endedAt === null);
     const latestByNet = latestVersions(networkMap, infos);
 
@@ -170,8 +215,16 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       // Version line: "v0.17.4" plus a red "behind 0.17.5" pill when a reachable node on the
       // same network runs something newer (src/versions.ts). Omitted when the node reports none.
       const ver = versionView(i?.version, latestByNet[nodeOf(cfg, side)?.network ?? ""] ?? null);
+      // Published pill (src/releases.ts): the project has shipped something newer than this node
+      // runs and no node on the network runs it yet. Once a peer runs it the behind pill carries
+      // the same number, so the published pill steps aside rather than repeat it.
+      const rel = releases?.()[nodeOf(cfg, side)?.network ?? ""] ?? null;
+      const published = rel?.version && ver.current && compareVersions(ver.current, rel.version) < 0 && !(ver.behind && ver.latest === rel.version) ? rel : null;
+      const pubLine = published
+        ? ` <span class="pill warn" title="published ${published.publishedAt === null ? "" : `${ago(published.publishedAt, now)}, `}no node on this network runs it yet">${esc(published.version ?? "")} published</span>`
+        : "";
       const verLine = ver.current
-        ? `<p class="muted">v${esc(ver.current)}${ver.behind ? ` <span class="pill bad" title="newest on this network: ${esc(ver.latest ?? "")}">behind ${esc(ver.latest ?? "")}</span>` : ""}</p>`
+        ? `<p class="muted">v${esc(ver.current)}${ver.behind ? ` <span class="pill bad" title="newest on this network: ${esc(ver.latest ?? "")}">behind ${esc(ver.latest ?? "")}</span>` : ""}${pubLine}</p>`
         : "";
       const shards =
         i?.shards
@@ -278,6 +331,26 @@ ${list
       return out;
     };
 
+    // Testnet cast explorer: one card per testnet network under the node cards. Text and hash
+    // are the only response strings shown; text is escaped, the hash was hex-checked by the
+    // feed. Nothing here is a link.
+    const feedHtml = () =>
+      nets
+        .map(({ network }) => {
+          const f = feed?.()[network];
+          if (f === undefined) return "";
+          const rows = f.casts
+            .map(
+              (x) =>
+                `<tr><td>${ago(x.at, now)}</td><td>${x.fid}</td><td class="text">${esc(x.text)}${x.replyTo ? ` <span class="muted">reply to ${esc(x.replyTo)}</span>` : ""}${x.embeds > 0 ? ` <span class="muted">${x.embeds} embed${x.embeds === 1 ? "" : "s"}</span>` : ""}</td><td class="mono">${esc(x.hash.slice(0, 12))}…</td></tr>`,
+            )
+            .join("");
+          return `<section class="card" style="margin-bottom:12px"><h2>Casts on ${esc(network)}</h2>
+<p class="muted">Newest ${f.casts.length} across ${f.fids} account${f.fids === 1 ? "" : "s"}, read from ${esc(label(f.source))} ${f.checkedAt === null ? "(not yet)" : ago(f.checkedAt, now)}${f.error ? `; last read failed: ${esc(f.error)}` : ""}. Also at /api/testnet/casts.</p>
+${rows === "" ? `<p class="muted">No casts yet. Register an account and post one with tools/first-cast in the testnet repo.</p>` : `<div class="scroll"><table><thead><tr><th>When</th><th>FID</th><th>Text</th><th>Hash</th></tr></thead><tbody>${rows}</tbody></table></div>`}</section>`;
+        })
+        .join("");
+
     const splitHtml = () => `<section class="card" style="margin-bottom:12px"><h2>Network split</h2>
 <p class="muted">A cast missing on every node of a network is a disagreement between the networks (scope "network"). A cast missing on one node while another node on its network has it is that node's problem (scope "node"). Unexplained by scope: node ${summary.byScope.node}, network ${summary.byScope.network}. Judged when each row is first seen, from the nodes that answered.</p>
 <table><thead><tr><th>Network</th><th>Nodes</th><th>Casts missing on all its nodes: unexplained</th><th>pending</th></tr></thead><tbody>
@@ -322,9 +395,13 @@ ${nets
     return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30">
 <title>snapdiff</title>
+<meta name="fc:miniapp" content="${esc(embedJson(cfg, originOf(c), view === "testnet" ? "/?net=testnet" : "/"))}">
+<meta name="fc:frame" content="${esc(embedJson(cfg, originOf(c), view === "testnet" ? "/?net=testnet" : "/"))}">
+<meta property="og:title" content="${esc(cfg.miniapp.name)}"><meta property="og:description" content="Snapchain and Hypersnap node health"><meta property="og:image" content="${esc(originOf(c))}/static/embed.png">
+<script type="module" src="/static/miniapp.mjs"></script>
 <style>
-:root{--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66;--card:#fff;--line:#e3e2dd;--ok:#2f7d4f;--bad:#b3261e;--warn:#9a6700;--fc:#8a63d2;--fc-bg:#f6f2fc;--fc-line:#c9b6ea}
-@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--muted:#9c9b95;--card:#1d1d1b;--line:#33322f;--ok:#5cc58a;--bad:#f2867c;--warn:#e0b44c;--fc:#8a63d2;--fc-bg:#231c33;--fc-line:#5d4a85}}
+:root{--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66;--card:#fff;--line:#e3e2dd;--ok:#2f7d4f;--bad:#b3261e;--warn:#9a6700;--fc:#8a63d2;--fc-bg:#f6f2fc;--fc-line:#c9b6ea;--tn:#a855f7;--tn-bg:#f5ecff;--tn-line:#d8b4fe}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--muted:#9c9b95;--card:#1d1d1b;--line:#33322f;--ok:#5cc58a;--bad:#f2867c;--warn:#e0b44c;--fc:#8a63d2;--fc-bg:#231c33;--fc-line:#5d4a85;--tn:#b975ff;--tn-bg:#2a1b47;--tn-line:#7a52c4}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
 main{max-width:1100px;margin:0 auto;padding:20px 16px}h1{font-size:20px;margin:0 0 4px}h2{font-size:16px;margin:0 0 4px}
 .muted{color:var(--muted);margin:0 0 8px}.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin:16px 0}
@@ -345,13 +422,24 @@ td.text{white-space:normal;min-width:240px;max-width:460px}
 .col .head{font-size:12px;text-transform:uppercase;letter-spacing:.05em;padding:3px 12px;border:1px solid var(--line);border-bottom:0;border-radius:10px 10px 0 0;background:var(--line);color:var(--muted)}
 .col{display:flex;flex-direction:column}.card .host{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;margin-bottom:2px}.col .head.ref{font-weight:700;color:var(--fg)}.col .card{border-radius:0 0 10px 10px;flex:1}
 .col[data-net=hypersnap] .head{background:var(--fc);border-color:var(--fc);color:#fff}.col[data-net=hypersnap] .card{background:var(--fc-bg);border-color:var(--fc-line)}
+.col[data-net*=testnet] .head{background:var(--tn);border-color:var(--tn);color:#fff}.col[data-net*=testnet] .card{background:var(--tn-bg);border-color:var(--tn-line)}
+.tabs{display:flex;gap:8px;margin:0 0 12px}.tab{text-decoration:none;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:2px 12px;font-size:13px}.tab.on{color:#fff;background:var(--fc);border-color:var(--fc)}.tab.tn.on{background:var(--tn);border-color:var(--tn)}
 .pager{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:16px 0 0}.pager .muted{margin:0}
 .pager button{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:2px 10px;font:inherit;cursor:pointer}
 .pager button:disabled{opacity:.4;cursor:default}
 </style></head><body><main>
-<h1>snapdiff: ${nets.map(({ network, labels }) => `${esc(network)} (${labels.length} node${labels.length === 1 ? "" : "s"})`).join(" vs ")}</h1>
-<p class="muted">Scans run every ${Math.round(cfg.scanIntervalMs / 60000)} min: ${summary.scans} so far, last ${ago(summary.lastScanAt, now)}, next in about ${nextScanIn(summary.lastScanAt, cfg.scanIntervalMs, now)}. This page reloads every 30 s. Read-only.</p>
-<div class="stats">${counts}</div>
+<h1>snapdiff${view === "testnet" ? " testnet" : ""}: ${nets.map(({ network, labels }) => `${esc(network)} (${labels.length} node${labels.length === 1 ? "" : "s"})`).join(" vs ")}</h1>
+${
+  hasTestnet
+    ? `<nav class="tabs"><a class="tab${view === "mainnet" ? " on" : ""}" href="/">Mainnet (${allNets.filter((n) => !isTestnet(n.network)).reduce((t, n) => t + n.labels.length, 0)} nodes)</a><a class="tab tn${view === "testnet" ? " on" : ""}" href="/?net=testnet">Testnet (${allNets.filter((n) => isTestnet(n.network)).reduce((t, n) => t + n.labels.length, 0)} nodes)</a></nav>`
+    : ""
+}
+${
+  view === "mainnet"
+    ? `<p class="muted">Scans run every ${Math.round(cfg.scanIntervalMs / 60000)} min: ${summary.scans} so far, last ${ago(summary.lastScanAt, now)}, next in about ${nextScanIn(summary.lastScanAt, cfg.scanIntervalMs, now)}. This page reloads every 30 s. Read-only.</p>
+<div class="stats">${counts}</div>`
+    : `<p class="muted">Node health and shard stalls for the testnet. The cast relay comparison on the Mainnet tab does not apply here. This page reloads every 30 s. Read-only.</p>`
+}
 ${extraLabels.length > 0 ? `<div class="pager" id="pager" hidden><span class="muted">More ${esc(nets.find((n) => n.labels.length > 1)?.network ?? "")} nodes</span><button type="button" id="prev" aria-label="Earlier nodes">&larr;</button><span id="pagei" class="muted"></span><button type="button" id="next" aria-label="Later nodes">&rarr;</button></div>` : ""}
 <div class="grid nodes" id="nodes">${[...pinnedLabels, ...extraLabels].map((l) => nodeCard(l, infos[l] ?? null, extraSet.has(l))).join("")}</div>
 <script>
@@ -374,12 +462,17 @@ ${extraLabels.length > 0 ? `<div class="pager" id="pager" hidden><span class="mu
   addEventListener('resize',render);render();
 })();
 </script>
-${splitHtml()}
-${clientsHtml(clients?.() ?? [])}
+${view === "testnet" ? feedHtml() : ""}
+${view === "mainnet" ? splitHtml() : ""}
+${clientsHtml((clients?.() ?? []).filter((h) => isTestnet(h.network) === (view === "testnet")))}
 <section class="card" style="margin-bottom:12px"><h2>Shard stalls${summary.openStalls > 0 ? ` <span class="pill bad">${summary.openStalls} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}</h2>
 <p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer on the same network kept going. When every reachable node of a network is stalled on a shard the rows are marked network-wide: that network stopped deciding blocks. Diffs on a stalled shard stay pending until it recovers. One line per node and shard with its latest stall; the last column counts the past 7 days; a line with several stalls opens on click.</p>${stallsHtml(stalls)}</section>
-<section class="card"><h2>Unexplained</h2><p class="muted">${nodeLabels.map((l) => `Missing on ${esc(l)}: ${summary.byMissingNode[l] ?? 0}`).join(" · ")}. Rows are rechecked for ${Math.round(cfg.recheckWindowMs / 3600000)} h; one that turns up on the missing side moves to sync lag and leaves this list.</p>${rowsHtml(unexplained, summary.byCause.unexplained)}</section>
-<section class="card" style="margin-top:12px"><h2>Pending</h2><p class="muted">Seen on one side, not yet old enough or not yet rechecked. Most resolve on their own.</p>${rowsHtml(pending, summary.byCause.pending)}</section>
+${
+  view === "mainnet"
+    ? `<section class="card"><h2>Unexplained</h2><p class="muted">${nodeLabels.map((l) => `Missing on ${esc(l)}: ${summary.byMissingNode[l] ?? 0}`).join(" · ")}. Rows are rechecked for ${Math.round(cfg.recheckWindowMs / 3600000)} h; one that turns up on the missing side moves to sync lag and leaves this list.</p>${rowsHtml(unexplained, summary.byCause.unexplained)}</section>
+<section class="card" style="margin-top:12px"><h2>Pending</h2><p class="muted">Seen on one side, not yet old enough or not yet rechecked. Most resolve on their own.</p>${rowsHtml(pending, summary.byCause.pending)}</section>`
+    : ""
+}
 </main></body></html>`);
   });
 

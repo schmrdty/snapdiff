@@ -8,7 +8,7 @@ import { Snapdiff } from '../src/snapdiff.ts';
 import { match } from '../src/trigger.ts';
 
 const base = { privateChat: false, mentioned: false, replyToBot: false, invitedThread: false };
-const state = (p: Partial<NodeState> = {}): NodeState => ({ network: 'hypersnap', reachable: true, error: null, stalledShards: [], networkStalledShards: [], version: null, latestVersion: null, ...p });
+const state = (p: Partial<NodeState> = {}): NodeState => ({ network: 'hypersnap', reachable: true, error: null, stalledShards: [], networkStalledShards: [], version: null, latestVersion: null, published: null, ...p });
 
 test('store: per-chat and total caps, idempotent add, remove one or all, file holds ids and labels only, reload', () => {
   const file = join(mkdtempSync(join(tmpdir(), 'subs-')), 'subscriptions.json');
@@ -64,6 +64,16 @@ test('events: baseline is silent, then down, back up, stall, stall ended; unchan
   assert.deepEqual(diffEvents('n', lag, state({ version: '0.17.5', latestVersion: '0.17.5' })).map(e => [e.kind, e.text]), [['current', 'n (hypersnap): version 0.17.5, current again']]);
   assert.deepEqual(diffEvents('n', state(), lag).map(e => e.kind), ['behind'], 'from unknown straight to behind fires once');
   assert.deepEqual(diffEvents('n', lag, state({ version: null, latestVersion: '0.17.5' })), [], 'losing the version (node down) is not "current"');
+  // Release published: the project is ahead of the node before any peer is. Once per new published version; a node already on it is silent.
+  const cur = state({ version: '0.17.11', latestVersion: '0.17.11', published: '0.17.11' });
+  assert.deepEqual(diffEvents('n', cur, state({ version: '0.17.11', latestVersion: '0.17.11', published: '0.17.12' })).map(e => [e.kind, e.text]), [['release', 'hypersnap 0.17.12 published, n runs 0.17.11']]);
+  const pub = state({ version: '0.17.11', latestVersion: '0.17.11', published: '0.17.12' });
+  assert.deepEqual(diffEvents('n', pub, pub), [], 'the same published version does not repeat');
+  assert.deepEqual(diffEvents('n', pub, state({ version: '0.17.11', latestVersion: '0.17.11', published: '0.17.13' })).map(e => e.kind), ['release'], 'the next publish fires again');
+  assert.deepEqual(diffEvents('n', cur, state({ version: '0.17.12', latestVersion: '0.17.12', published: '0.17.12' })), [], 'a node already on the published version hears nothing');
+  assert.deepEqual(diffEvents('n', state({ published: null }), state({ version: null, published: '0.17.12' })).map(e => [e.kind, e.text]), [['release', 'hypersnap 0.17.12 published, n runs an unknown version']], 'first known publish with an unknown node version still fires');
+  assert.deepEqual(diffEvents('n', pub, state({ version: '0.17.11', latestVersion: '0.17.11', published: null })), [], 'the feed going away is silent');
+  assert.deepEqual(diffEvents('n', cur, state({ version: '0.17.11', latestVersion: '0.17.12', published: '0.17.12' })).map(e => e.kind), ['behind', 'release'], 'a peer upgrading in the same poll as the publish: both, once');
   assert.deepEqual(diffEvents('n', state({ version: '0.9.0', latestVersion: '0.10.0' }), state({ version: '0.9.0', latestVersion: '0.10.0' })), [], 'numeric compare, no re-fire');
   const quiet = new Map<string, number>();
   const e = diffEvents('n', state(), state({ reachable: false }))[0]!;
@@ -89,12 +99,16 @@ test('nodeStates: one summary call (plus stalls when open) gives reachability an
   const api = new Snapdiff((async (url: string) => { const key = new URL(url).pathname.split('/').at(-1)!; calls.push(key); return { ok: true, json: async () => sample[key] } as Response; }) as typeof fetch, () => 130000);
   const states = await api.nodeStates(['hyper-a', 'hyper-b', 'ghost']);
   assert.ok(states);
-  assert.deepEqual(states.get('hyper-a'), { network: 'hypersnap', reachable: true, error: null, stalledShards: [1], networkStalledShards: [1], version: null, latestVersion: null }, 'a summary without versions gives null, never a guess; the open stall is scope network in the sample');
+  assert.deepEqual(states.get('hyper-a'), { network: 'hypersnap', reachable: true, error: null, stalledShards: [1], networkStalledShards: [1], version: null, latestVersion: null, published: null }, 'a summary without versions gives null, never a guess; the open stall is scope network in the sample');
   const versioned = { ...sample, summary: { ...sample.summary, versions: { hypersnap: '0.17.5' }, info: { ...sample.summary.info, 'hyper-a': { ...sample.summary.info['hyper-a'], version: '0.17.4' } } } };
   const vapi = new Snapdiff((async (url: string) => ({ ok: true, json: async () => versioned[new URL(url).pathname.split('/').at(-1)!] }) as Response) as typeof fetch, () => 130000);
   const vs = await vapi.nodeStates(['hyper-a', 'hyper-b']);
   assert.equal(vs?.get('hyper-a')?.version, '0.17.4');
   assert.equal(vs?.get('hyper-a')?.latestVersion, '0.17.5', 'the network newest comes from summary.versions');
+  const released = { ...sample, summary: { ...sample.summary, releases: { hypersnap: { network: 'hypersnap', version: '0.17.12', publishedAt: 1, checkedAt: 1, error: null }, snapchain: null } } };
+  const rapi = new Snapdiff((async (url: string) => ({ ok: true, json: async () => released[new URL(url).pathname.split('/').at(-1)!] }) as Response) as typeof fetch, () => 130000);
+  const rs = await rapi.nodeStates(['hyper-a']);
+  assert.equal(rs?.get('hyper-a')?.published, '0.17.12', 'the published version comes from summary.releases');
   assert.equal(vs?.get('hyper-b')?.version, null, 'a node without a version stays null');
   assert.equal(states.get('hyper-b')?.reachable, false);
   assert.deepEqual(states.get('hyper-b')?.stalledShards, []);

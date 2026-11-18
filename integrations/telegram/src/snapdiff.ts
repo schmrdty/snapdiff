@@ -4,7 +4,7 @@ export const DASHBOARD = 'https://snapdiff.schmidtiest.xyz';
 const API = `${DASHBOARD}/api`;
 type Row = { fid: number; hash: string; presentNodes: string[]; presentOn: string; missingOn: string; scope: string | null; cause: string; resolvedAt?: number | null };
 type Info = { reachable: boolean; maxBlockDelay: number | null; error?: string | null; provider?: string | null; version?: string | null } | null;
-type Summary = { nodes: string[]; networks: Record<string, string[]>; reference: string; summary: { byCause: Record<string, number>; byScope: Record<string, number>; openStalls: number }; info: Record<string, Info>; versions?: Record<string, string | null> };
+type Summary = { nodes: string[]; networks: Record<string, string[]>; reference: string; summary: { byCause: Record<string, number>; byScope: Record<string, number>; openStalls: number }; info: Record<string, Info>; versions?: Record<string, string | null>; releases?: Record<string, { version?: string | null } | null> };
 type Client = { label?: string; name?: string; network: string; status: string; latencyMs?: number | null; latency?: number | null; checkedAt: number | null };
 type Stall = { side?: string; shardId?: number; scope?: string | null; endedAt: number | null };
 type Shard = { shardId: number; maxHeight: number; blockDelay: number };
@@ -171,7 +171,9 @@ export class Snapdiff {
         const networkStalledShards = mine.filter(x => x.scope === 'network').map(x => x.shardId as number).sort((a, b) => a - b);
         const network = networkOf.get(label) ?? 'unknown';
         const latestVersion = s.versions && typeof s.versions[network] === 'string' ? safe(s.versions[network]) : null;
-        out.set(label, { network: safe(network), reachable: i ? i.reachable === true : null, error: i && !i.reachable && i.error ? safe(i.error) : null, stalledShards, networkStalledShards, version: i && typeof i.version === 'string' ? safe(i.version) : null, latestVersion });
+        const rel = s.releases ? s.releases[network] : null;
+        const published = rel && typeof rel.version === 'string' ? safe(rel.version) : null;
+        out.set(label, { network: safe(network), reachable: i ? i.reachable === true : null, error: i && !i.reachable && i.error ? safe(i.error) : null, stalledShards, networkStalledShards, version: i && typeof i.version === 'string' ? safe(i.version) : null, latestVersion, published });
       }
       return out;
     } catch { return null; }

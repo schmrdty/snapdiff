@@ -16,13 +16,16 @@ snapdiff.schmidtiest.xyz {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
-		X-Frame-Options DENY
-		# No external assets. Inline <style> is allowed; the only script allowed is
-		# the dashboard's own node pager, pinned by the sha256 of its exact text
-		# (test/csp.test.ts checks the hash against the rendered page, so a change
-		# to the script fails the suite until this line is updated). Nothing else
-		# can run, so even a rendering mistake cannot load code from a third party.
-		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'sha256-pCV/tf9HK02XeGrOMWOCLa+sk9XNi0vsuHClWl9xO1Q='; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+		# No external assets. Inline <style> is allowed. Scripts: the dashboard's own
+		# node pager, pinned by the sha256 of its exact text (test/csp.test.ts checks
+		# the hash against the rendered page, so a change to the script fails the
+		# suite until this line is updated), and module files served from this origin
+		# under /static (the Mini App ready() call and the vendored SDK bundle).
+		# Nothing from a third party can run.
+		# frame-ancestors is open on purpose: Farcaster and Hypersnap clients open
+		# Mini Apps in iframes (web) or WebViews (mobile), and the page is read-only
+		# with no actions a framing page could abuse. The X-Frame-Options header went with it.
+		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self' 'sha256-pCV/tf9HK02XeGrOMWOCLa+sk9XNi0vsuHClWl9xO1Q='; frame-ancestors *; base-uri 'none'; form-action 'none'"
 		-Server
 	}
 

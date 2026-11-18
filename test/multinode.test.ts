@@ -2,7 +2,7 @@
 // 'a'/'b' database relabel. Hubs are fakes; nothing goes online.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadNodes, loadConfig, networks } from "../src/config.js";
+import { isTestnetNetwork, loadNodes, loadConfig, networks, scanNodes } from "../src/config.js";
 import { scopeOf } from "../src/classify.js";
 import type { HubClient } from "../src/hub.js";
 import { scanOnce, type Deps } from "../src/loops.js";
@@ -160,5 +160,46 @@ test("legacy database: 'a'/'b' rows are relabeled on open, the old CHECK is gone
   // The rebuilt table accepts any label now.
   await store.insertDiff({ hash: "0x02", fid: 1, shard: null, msgTimestamp: 1, presentOn: "ohsnap", missingOn: "snapchain", presentNodes: ["ohsnap"], scope: "network", missingNetwork: "snapchain", messageJson: "{}", firstSeen: 2 });
   assert.equal((await store.summary()).byCause.pending, 2);
+  await store.close();
+});
+
+test("scan: a node on a testnet network is never asked for casts and gets no diff rows", async () => {
+  const store = new SqliteStore(":memory:");
+  const cfg = {
+    ...loadConfig(),
+    nodes: [
+      { label: "ref", url: "http://ref.test", network: "snapchain", headers: {}, providers: [{ url: "http://ref.test", headers: {} }] },
+      { label: "x", url: "http://x.test", network: "hypersnap", headers: {}, providers: [{ url: "http://x.test", headers: {} }] },
+      { label: "testnet-0", url: "http://t.test", network: "hypersnap-testnet", headers: {}, providers: [{ url: "http://t.test", headers: {} }] },
+    ],
+    reference: "ref",
+    watchFids: [1],
+    sampleSize: 0,
+    concurrency: 2,
+  };
+  for (const l of ["ref", "x", "testnet-0"]) await store.recordInfo(infoFor(l));
+  const shared = msg(1, "0xaa");
+  let testnetAsked = 0;
+  const deps: Deps = {
+    cfg,
+    store,
+    log: () => {},
+    now: () => 5_000_000,
+    hubs: {
+      ref: fakeHub({ 1: [shared] }),
+      x: fakeHub({ 1: [shared] }),
+      "testnet-0": fakeHub(() => {
+        testnetAsked++;
+        return [];
+      }),
+    },
+  };
+  const run = await scanOnce(deps);
+  assert.equal(testnetAsked, 0, "the testnet node is not scanned");
+  assert.deepEqual(run.messagesByNode, { ref: 1, x: 1 }, "the run reports mainnet nodes only");
+  assert.equal((await store.listDiffs({})).length, 0, "a cast absent from the testnet is not a diff");
+  assert.deepEqual(scanNodes(cfg).map((n) => n.label), ["ref", "x"]);
+  assert.equal(isTestnetNetwork("hypersnap-testnet"), true);
+  assert.equal(isTestnetNetwork("hypersnap"), false);
   await store.close();
 });

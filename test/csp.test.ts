@@ -1,4 +1,5 @@
-// The Caddy CSP allows exactly one script: the dashboard's node pager, by hash. If the
+// The Caddy CSP allows the dashboard's node pager by hash plus module files from this origin
+// (/static, the Mini App bootstrap). If the
 // inline script changes, the hash in deploy/Caddyfile must change with it or the browser
 // blocks the pager and every node card shows at once (seen live on 2026-11-06).
 import { test } from "node:test";
@@ -20,5 +21,5 @@ test("CSP: the Caddyfile script hash matches the dashboard's inline script", asy
   const caddy = readFileSync(new URL("../deploy/Caddyfile", import.meta.url), "utf8");
   const csp = caddy.match(/Content-Security-Policy "([^"]+)"/)?.[1] ?? "";
   const scriptSrc = csp.match(/script-src ([^;]+);/)?.[1] ?? "";
-  assert.equal(scriptSrc, hash, `deploy/Caddyfile script-src must be ${hash}`);
+  assert.equal(scriptSrc, `'self' ${hash}`, `deploy/Caddyfile script-src must be 'self' ${hash}`);
 });
