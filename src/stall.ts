@@ -19,8 +19,11 @@ import type { InfoSnapshot, Side, StallScope } from "./types.js";
  *   the validators lost quorum. Recorded once per node so each node's history is complete;
  *   the dashboard header pill and the bot collapse the open ones into one network-wide line;
  *   the stall table keeps one row per node, suffixed "(network-wide)". The peer is then
- *   the healthiest node on any other network, kept as evidence that time passed. When no
- *   node anywhere is healthy nothing is recorded: that is a clock or probe problem.
+ *   the healthiest node on another network, kept as evidence that time passed. A mainnet
+ *   stall is never measured against a testnet (`isTestnet`): on 2026-11-19 the testnet node
+ *   had the lowest delay, won the pick, and the stall table's "Peer" column read as if a
+ *   mainnet validator were peered with the testnet. A testnet stall may use any network.
+ *   When no node anywhere is healthy nothing is recorded: that is a clock or probe problem.
  */
 export interface ShardStallSignal {
   side: Side;
@@ -39,6 +42,7 @@ export function detectStalls(
   infos: ReadonlyArray<InfoSnapshot | null>,
   behindBlockDelay: number,
   networkOf: (side: Side) => string = () => "",
+  isTestnet: (network: string) => boolean = () => false,
 ): ShardStallSignal[] {
   const live = infos.filter((i): i is InfoSnapshot => i !== null && i.reachable);
   if (live.length < 2) return [];
@@ -63,7 +67,7 @@ export function detectStalls(
         scope = "node";
         peer = same;
       } else {
-        const other = healthiest(live.filter((o) => networkOf(o.side) !== net), s.shardId);
+        const other = healthiest(live.filter((o) => networkOf(o.side) !== net && (isTestnet(net) || !isTestnet(networkOf(o.side)))), s.shardId);
         if (other === null || other.shard.blockDelay > behindBlockDelay) continue;
         scope = "network";
         peer = other;

@@ -194,3 +194,20 @@ test("stall lifecycle: start, touch, end; recheck pauses only the stalled shard"
   assert.ok(logs.some((l) => /b shard 2 is now this node only, the rest of hypersnap moves again/.test(l)), "scope downgrade is logged");
   await store.close();
 });
+
+test("detectStalls: a mainnet-wide stall is never measured against a testnet; a testnet-wide stall may use any network", () => {
+  const net = (side: Side) => (side.startsWith("t") ? "hypersnap-testnet" : side.startsWith("h") ? "hypersnap" : "snapchain");
+  const isTestnet = (n: string) => /testnet/i.test(n);
+  const snap = info("snap", { 0: 1 }, { 0: 9000 });
+  const t0 = info("t0", { 0: 0 }, { 0: 116_000 });
+  const h1 = info("h1", { 0: 100 }, { 0: 8000 });
+  const h2 = info("h2", { 0: 101 }, { 0: 8000 });
+  // 2026-11-19: the testnet node had the lowest delay, won the cross-network pick, and the table read as a gossip peering.
+  assert.deepEqual(detectStalls([snap, t0, h1, h2], 50, net, isTestnet).map((v) => [v.side, v.scope, v.peer]), [["h1", "network", "snap"], ["h2", "network", "snap"]]);
+  // No non-testnet network left to compare against: nothing is recorded.
+  assert.deepEqual(detectStalls([t0, h1, h2], 50, net, isTestnet), []);
+  // A testnet-wide stall is still measured against the healthiest node anywhere else.
+  assert.deepEqual(detectStalls([snap, info("t0", { 0: 200 }, { 0: 116_000 }), info("h1", { 0: 2 }, { 0: 8000 })], 50, net, isTestnet).map((v) => [v.side, v.scope, v.peer]), [["t0", "network", "snap"]]);
+  // Without the predicate the old pick stands (callers that do not know about testnets).
+  assert.deepEqual(detectStalls([snap, t0, h1, h2], 50, net).map((v) => v.peer), ["t0", "t0"]);
+});

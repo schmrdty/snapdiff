@@ -377,7 +377,7 @@ ${nets
         groups.set(k, [...(groups.get(k) ?? []), s]);
       }
       const spans = (s: StallRow) => stallCells(s).replace(/<td>/g, "<span>").replace(/<\/td>/g, "</span>");
-      const head = `<div class="hdr"><span>Node</span><span>Shard</span><span>Latest started</span><span>Duration</span><span>Stuck at</span><span>Peer</span><span>Peer reached</span><span>Worst delay</span><span>Last 7 d</span></div>`;
+      const head = `<div class="hdr"><span>Node</span><span>Shard</span><span>Latest started</span><span>Duration</span><span>Stuck at</span><span>Compared with</span><span>Its height</span><span>Worst delay</span><span>Last 7 d</span></div>`;
       const body = [...groups.values()]
         .map((g) => {
           const latest = g[0]!;
@@ -386,7 +386,7 @@ ${nets
           const week = recent.length === 0 ? "none" : `${recent.length} stall${recent.length === 1 ? "" : "s"}, ${dur(0, total)}`;
           const line = `<span>${esc(label(latest.side))}${latest.scope === "network" ? " (network-wide)" : ""}</span><span>${latest.shardId}</span>${spans(latest)}<span>${week}</span>`;
           if (g.length === 1) return `<div class="row">${line}</div>`;
-          return `<details class="group"><summary>${line}</summary><table><thead><tr><th>Started</th><th>Duration</th><th>Stuck at</th><th>Peer</th><th>Peer reached</th><th>Worst delay</th></tr></thead><tbody>${g.slice(0, 100).map((s) => `<tr>${stallCells(s)}</tr>`).join("")}</tbody></table></details>`;
+          return `<details class="group"><summary>${line}</summary><table><thead><tr><th>Started</th><th>Duration</th><th>Stuck at</th><th>Compared with</th><th>Its height</th><th>Worst delay</th></tr></thead><tbody>${g.slice(0, 100).map((s) => `<tr>${stallCells(s)}</tr>`).join("")}</tbody></table></details>`;
         })
         .join("");
       return `<div class="scroll"><div class="stalls">${head}${body}</div></div>`;

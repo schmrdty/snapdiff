@@ -1,4 +1,4 @@
-import { scanNodes, type Config } from "./config.js";
+import { isTestnetNetwork, scanNodes, type Config } from "./config.js";
 import type { HubClient } from "./hub.js";
 import type { Store } from "./store/store.js";
 import type { HubMessage, InfoSnapshot, ScanRun, Side } from "./types.js";
@@ -56,7 +56,7 @@ export async function pollInfo(d: Deps): Promise<void> {
 export async function updateStalls(d: Deps, infos: ReadonlyArray<InfoSnapshot | null>): Promise<void> {
   const now = clock(d);
   const networkOf = new Map<Side, string>(d.cfg.nodes.map((n) => [n.label, n.network]));
-  const signals = detectStalls(infos, d.cfg.behindBlockDelay, (side) => networkOf.get(side) ?? "");
+  const signals = detectStalls(infos, d.cfg.behindBlockDelay, (side) => networkOf.get(side) ?? "", isTestnetNetwork);
   const open = await d.store.openStalls();
   const key = (side: Side, shardId: number) => `${side}:${shardId}`;
   const seen = new Set<string>();
