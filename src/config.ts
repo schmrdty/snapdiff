@@ -108,6 +108,8 @@ export interface Config {
   providerRetryMs: number;
   /** Path to the clients JSON (docs/CLIENT-HEALTH.md). Empty = feature off. */
   clientHealthFile: string;
+  /** Optional credit line under the Clients card: where the list of clients came from. Text plus an https link, both or neither. */
+  clientHealthCredit: { text: string; url: string } | null;
   clientHealthIntervalMs: number;
   /**
    * Release feed per network (src/releases.ts): a Docker Hub tag-list URL whose newest
@@ -118,6 +120,16 @@ export interface Config {
   releaseIntervalMs: number;
   /** Testnet cast explorer refresh (src/testnet-feed.ts); only runs when a testnet network is configured. */
   testnetFeedIntervalMs: number;
+  /**
+   * Which networks get the peer view (src/mesh.ts): "testnet", "mainnet", both, or none.
+   * MESH_NETWORKS, default "testnet": the feature is staged on the testnet first (Ryan,
+   * 2026-11-19); mainnet nodes join when the operator writes "mainnet,testnet".
+   */
+  meshNetworks: MeshKind[];
+  meshIntervalMs: number;
+  /** network → https URL of its validators file (VALIDATOR_SET_URLS, "network=url,network=url"). The peer view classifies validators against it. */
+  validatorSetUrls: Record<string, string>;
+  validatorSetIntervalMs: number;
   /** Farcaster Mini App surface (src/miniapp.ts): name and the signed domain association. */
   miniapp: MiniAppConfig;
 }
@@ -313,10 +325,15 @@ export function loadConfig(): Config {
     requestTimeoutMs: num("REQUEST_TIMEOUT_MS", 10_000),
     providerRetryMs: num("PROVIDER_RETRY_MIN", 10) * min,
     clientHealthFile: str("CLIENT_HEALTH_FILE", ""),
+    clientHealthCredit: parseCredit(str("CLIENT_HEALTH_CREDIT_TEXT", ""), str("CLIENT_HEALTH_CREDIT_URL", "")),
     clientHealthIntervalMs: num("CLIENT_HEALTH_INTERVAL_SEC", 60) * 1000,
     releaseFeeds: loadReleaseFeeds(nodes.map((n) => n.network)),
     releaseIntervalMs: num("RELEASE_INTERVAL_MIN", 10) * min,
     testnetFeedIntervalMs: num("TESTNET_FEED_INTERVAL_SEC", 30) * 1000,
+    meshNetworks: parseMeshNetworks(str("MESH_NETWORKS", "testnet")),
+    meshIntervalMs: num("MESH_INTERVAL_SEC", 60) * 1000,
+    validatorSetUrls: parseValidatorSetUrls(str("VALIDATOR_SET_URLS", DEFAULT_VALIDATOR_SET_URLS)),
+    validatorSetIntervalMs: num("VALIDATOR_SET_INTERVAL_SEC", 6 * 3600) * 1000,
     miniapp: loadMiniApp(),
   };
 }
@@ -351,6 +368,73 @@ export const comparedNodes = (cfg: Pick<Config, "nodes" | "reference">): NodeCon
  * 2026-11-17: 390 false diffs in one scan).
  */
 export const isTestnetNetwork = (network: string): boolean => /testnet/i.test(network);
+
+/** CLIENT_HEALTH_CREDIT_TEXT and _URL: set both (https only, text at most 120 characters) or neither. */
+export function parseCredit(text: string, url: string): { text: string; url: string } | null {
+  const t = text.trim();
+  const u = url.trim();
+  if (t === "" && u === "") return null;
+  if (t === "" || u === "") throw new Error("CLIENT_HEALTH_CREDIT_TEXT and CLIENT_HEALTH_CREDIT_URL must be set together");
+  if (t.length > 120) throw new Error("CLIENT_HEALTH_CREDIT_TEXT must be at most 120 characters");
+  let parsed: URL;
+  try {
+    parsed = new URL(u);
+  } catch {
+    throw new Error("CLIENT_HEALTH_CREDIT_URL must be an https URL");
+  }
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new Error("CLIENT_HEALTH_CREDIT_URL must be an https URL");
+  return { text: t, url: parsed.toString() };
+}
+
+/** Upstream Hypersnap mainnet file; a testnet or another network adds its own entry. */
+export const DEFAULT_VALIDATOR_SET_URLS = "hypersnap=https://raw.githubusercontent.com/farcasterorg/hypersnap/main/validators.toml";
+
+/** "network=https://...,network=https://..."; "off" or empty disables classification (rows become peer counts only). */
+export function parseValidatorSetUrls(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const t = text.trim();
+  if (t === "" || t.toLowerCase() === "off") return out;
+  for (const part of t.split(",").map((s) => s.trim()).filter((s) => s !== "")) {
+    const eq = part.indexOf("=");
+    if (eq <= 0) throw new Error(`VALIDATOR_SET_URLS entry "${part}" must be network=https://url`);
+    const network = part.slice(0, eq).trim();
+    const url = part.slice(eq + 1).trim();
+    let u: URL;
+    try {
+      u = new URL(url);
+    } catch {
+      throw new Error(`VALIDATOR_SET_URLS: "${url}" is not a URL`);
+    }
+    if (u.protocol !== "https:" || u.username !== "" || u.password !== "") throw new Error(`VALIDATOR_SET_URLS: "${url}" must be https without credentials`);
+    if (!/^[A-Za-z0-9._-]{1,24}$/.test(network)) throw new Error(`VALIDATOR_SET_URLS: bad network name "${network}"`);
+    out[network] = u.toString();
+  }
+  return out;
+}
+
+/** The two words MESH_NETWORKS accepts. A network is "testnet" by isTestnetNetwork, else "mainnet". */
+export type MeshKind = "mainnet" | "testnet";
+export const meshKindOf = (network: string): MeshKind => (isTestnetNetwork(network) ? "testnet" : "mainnet");
+
+/** "testnet", "mainnet", "mainnet,testnet" (any order, any case), or "off" / "none" for nothing. Anything else is a startup error. */
+export function parseMeshNetworks(text: string): MeshKind[] {
+  const words = text.split(/[\s,]+/).map((w) => w.trim().toLowerCase()).filter((w) => w !== "");
+  if (words.length === 0 || words.every((w) => w === "off" || w === "none")) return [];
+  const out: MeshKind[] = [];
+  for (const w of words) {
+    if (w !== "mainnet" && w !== "testnet") throw new Error(`MESH_NETWORKS must be "mainnet", "testnet", both, or "off"; got "${w}"`);
+    if (!out.includes(w)) out.push(w);
+  }
+  return out;
+}
+
+/**
+ * Nodes polled for the peer view: on an enabled network kind AND on a network that has a
+ * validators file configured. Without the file there is nothing to classify, and a bare peer
+ * count changes every minute (the snapchain node filled the journal, 2026-11-20).
+ */
+export const meshNodes = (cfg: Pick<Config, "nodes" | "meshNetworks" | "validatorSetUrls">): NodeConfig[] =>
+  cfg.nodes.filter((n) => cfg.meshNetworks.includes(meshKindOf(n.network)) && Object.hasOwn(cfg.validatorSetUrls, n.network));
 
 /** The nodes the relay scan compares: every configured node that is not on a testnet. */
 export const scanNodes = (cfg: Pick<Config, "nodes">): NodeConfig[] => cfg.nodes.filter((n) => !isTestnetNetwork(n.network));

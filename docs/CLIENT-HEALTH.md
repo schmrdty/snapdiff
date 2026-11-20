@@ -26,6 +26,8 @@ What the client's server sees: one GET a minute from the VPS address with an `ac
 
 ## Config file
 
+Optional credit: `CLIENT_HEALTH_CREDIT_TEXT` and `CLIENT_HEALTH_CREDIT_URL` (https only, set both or neither) print "List from <text>" with the link under the card, for when the list of clients is maintained by someone else.
+
 A JSON array. Put the real file outside the deployed tree (`/srv/snapdiff/data/clients.json` on the VPS; `deploy.sh` never touches `data/`). `clients.example.json` in the repo is a template with placeholders.
 
 | Field | Required | Meaning |
@@ -36,6 +38,7 @@ A JSON array. Put the real file outside the deployed tree (`/srv/snapdiff/data/c
 | `healthUrl` | no | Status endpoint. `https://` only. Omit for a link-only row (status stays `unknown`) |
 | `statusPath` | no | Dot path to the status field in the JSON body, default `status`. `null` means any HTTP 200 counts as ok (for plain `/healthz` endpoints) |
 | `okValues` | no | Values at `statusPath` that mean ok, case-insensitive. Default: ok, healthy, up, operational, pass, green |
+| `degradedValues` | no | Values at `statusPath` that mean degraded even behind a non-2xx code, case-insensitive. Default: degraded, partial, impaired, warn, warning, yellow, amber |
 
 How a check resolves:
 
@@ -43,7 +46,8 @@ How a check resolves:
 |---|---|---|
 | 200 and the field is an ok value (or `true`, or `statusPath` is null) | ok | |
 | 200 and the field is some other string or `false` | degraded | `status "<value>"` |
-| Any non-2xx | down | `HTTP <code>` |
+| Non-2xx and the JSON field is an ok or degraded value (a 503 that says `degraded`: answering, impaired) | degraded | `HTTP <code>, status "<value>"` |
+| Any other non-2xx | down | `HTTP <code>` |
 | Timeout, connection failure, or redirect | down | `timeout`, `unreachable`, `redirect refused` |
 | 200 but no JSON, no field, or body over 64 KB | unknown | `not JSON`, `no status field`, `body too large` |
 

@@ -49,7 +49,7 @@ Run each node on its own machine (both default to ports 3381-3383, and a Snapcha
 
 To compare three or more nodes, list them in `NODES` and give each its own `NODE_<LABEL>_URL`, `NODE_<LABEL>_NETWORK` (`snapchain` or `hypersnap`), and `NODE_<LABEL>_HEADERS` when a key is needed. The labels become the node ids in the database, the dashboard, and the API; the network tag is what lets snapdiff tell "one Hypersnap node is behind" from "Hypersnap and Snapchain disagree". Add `NODE_<LABEL>_PRIVATE=1` for a node whose address should not be published (a bare IP, for example): the page, the API, and every note then name it by label only, and labels may contain dots so such a node can be called `hypersnape.node`. `NODE_<LABEL>_NAME` gives a node a display name on the page without changing its id, `NODE_<LABEL>_VALIDATOR=1` labels its card, `/api/node` and the bot "validator" instead of "node", and `REFERENCE_NODE_2` names the reference of the second network (its card is tagged, and `presentOn` falls back to it). Example and migration notes in `docs/MULTI-NODE.md`.
 
-A network whose name contains `testnet` (for example `hypersnap-testnet`) is shown on the dashboard's Testnet tab (`/?net=testnet`) and left out of the Mainnet tab, its stall rows included. Its nodes are polled for health, versions and stalls but never take part in the cast scan or the rechecks (mainnet FIDs do not exist there). The API routes return every network regardless. Testnet cards use their own color (`--tn`, a brighter purple than Hypersnap's `--fc`). Mark a validator with `NODE_<LABEL>_VALIDATOR=1`. Under the testnet node cards a cast explorer lists the newest 100 casts on that network (every FID from `/v1/fids` on each data shard, one page of `castsByFid` newest first, refreshed every `TESTNET_FEED_INTERVAL_SEC`, default 30; also at `GET /api/testnet/casts`). It reads the network's reference node and is sized for hundreds of accounts; past that it should move to the events stream.
+A network whose name contains `testnet` (for example `hypersnap-testnet`) is shown on the dashboard's Testnet tab (`/?net=testnet`) and left out of the Mainnet tab, its stall rows included. Its nodes are polled for health, versions and stalls but never take part in the cast scan or the rechecks (mainnet FIDs do not exist there). The API routes return every network regardless. Testnet cards use their own color (`--tn`, a brighter purple than Hypersnap's `--fc`). Mark a validator with `NODE_<LABEL>_VALIDATOR=1`. Under the testnet node cards a cast explorer lists the newest 100 casts on that network (every FID from `/v1/fids` on each data shard, one page of `castsByFid` newest first, refreshed every `TESTNET_FEED_INTERVAL_SEC`, default 30; also at `GET /api/testnet/casts`). It reads the network's reference node and is sized for hundreds of accounts; past that it should move to the events stream. The Testnet tab is testnet data only: its stall pill counts that tab's open stalls, and a testnet-wide stall that was timed against a mainnet node (the only healthy clock when every testnet node stopped) reads `whole network` with no node name or height; the Mainnet tab's hypersnap-against-snapchain rows are unchanged.
 
 ## How it works
 
@@ -127,6 +127,7 @@ A one-sided fetch failure never creates a diff. The FID is skipped for that scan
 | `GET /api/summary` | `nodes` (labels, in order), `networks` (network to labels), `reference`, counts by cause, by missing node (`summary.byMissingNode`), by scope (`summary.byScope`), per-network disagreements (`summary.networkSplit`), latest `/v1/info` per node (`info[label]`, including `version`), `versions` (per network, the newest version its reachable nodes report), `releases` (per network, the newest version the project has published: `version`, `publishedAt`, `checkedAt`, `error`; `{}` when the feed is off) |
 | `GET /api/diffs?cause=unexplained&limit=200` | Diff rows with the full message JSON, shard, `presentNodes`, and `scope` |
 | `GET /api/stalls?limit=200` | Shard stall events, newest first |
+| `GET /api/mesh` | Peer view per node on the networks `MESH_NETWORKS` enables: `source` (`currentPeers`), `mesh` (label to summary: `state`, `fallback`, `setKnown`, `self` with role and `joinsAt`, `peers` counts with `setSize`, `validators` rows, `missing` key prefixes), `names` (peer id to node name), `networks`, `validatorSets` (networks with a file configured) |
 | `GET /api/node/LABEL?hours=24&limit=60` | One node by label: `name`, `network`, `reference` and `validator` flags, `version` (`current`, `latest` on its network, `behind`), `release` (newest published on its network, or null), `latest` snapshot, `window` (samples, up, down, `uptimePct`, `worstDelay`, stall count over 1 to 168 hours), its `stalls` in the window, and `history` (newest samples, up to 1500). 404 for an unknown label. Operators use it to follow their own node; the Telegram bot's `/node LABEL` reads it |
 | `GET /llms.txt` | Plain-text description of this deployment for agents and crawlers (llms.txt layout): node list from the running config, the endpoints above with absolute links, how to read scope and cause, and doc links |
 
@@ -155,6 +156,33 @@ See `.env.example`. Every value has a default. Sizing the net: with the defaults
 ## Published releases
 
 Each node card compares the node to two bars. `behind X` (red) means a reachable node on the same network already runs X. `X published` (amber) means the project has pushed X to its image registry and no node on the network runs it yet, so this is the earlier of the two. The feed is the Docker Hub tag list of each network's image (`src/releases.ts`), fetched from the server every `RELEASE_INTERVAL_MIN` minutes; the only thing read from a response is a numeric tag and its push time. `RELEASE_FEED_<NETWORK>` overrides the URL or turns a network off (`off`). Hypersnap has no GitHub releases for its 0.17.x line, so the registry is the release list.
+
+## Peer view (optional, testnet first)
+
+`/v1/info` says whether a node's heights move; the peer view says whether it is connected to
+the validators, which is what a client or bot checks before switching nodes. It reads each
+node's `/v1/currentPeers`, the ordinary API that stays open when an operator locks the
+diagnostic `/v1/mesh` endpoint behind `admin_rpc_auth`. `currentPeers` lists peer ids only,
+so snapdiff classifies them itself: a Hypersnap peer id is the node's ed25519 key behind a
+fixed prefix, that key is its consensus key, and membership is a lookup in the network's
+validators file, which snapdiff fetches from this server every six hours
+(`VALIDATOR_SET_URLS`, mainnet default: the upstream file; add your testnet's as a second
+entry; a network without an entry is not polled). The current set per shard follows the node's own heights, so a key in a set that
+takes effect later counts as a read node until then (the hover text names the height).
+
+With `MESH_NETWORKS=testnet` (the default) every node on a testnet network gets a `peers:`
+line under its version: its role and `A of N validators connected` against the current set,
+then a `validators:` row naming the connected validators. The set members it is not connected
+to are in `/api/mesh` as `missing` and in the change log, not on the card. A row shows a snapdiff node's name when
+that node's `/v1/info` has reported its peer id, otherwise the first eight characters of the
+key and a shortened peer id. Hover for the full peer id. `MESH_NETWORKS=mainnet,testnet` turns
+it on for every node, `off` for none; `MESH_INTERVAL_SEC` (60) is the poll. snapdiff keeps peer
+ids, derived key prefixes and counts only: no addresses, versions or free text from the
+response reach the page or `/api/mesh`. A node that gates the route reads `peers: closed`;
+`absent` is a node without it and `unreachable` one that did not answer. A view read through
+a fallback provider is marked `via fallback provider` and names nobody. The poller logs one
+line per change, so the journal is a timeline of which validator dropped out of whose view.
+What the diagnostic endpoint carries, for comparison: `docs/mesh-endpoint.md`.
 
 ## Client health (optional)
 

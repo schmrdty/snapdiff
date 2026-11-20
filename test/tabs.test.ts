@@ -55,3 +55,40 @@ test("tabs: no tab bar without a testnet network, and ?net=testnet falls back to
   assert.doesNotMatch(main, /class="tabs"/);
   assert.match(forced, /<h1>snapdiff: snapchain \(1 node\) vs hypersnap \(1 node\)<\/h1>/);
 });
+
+test("tabs: the stall pill and the stall rows carry this tab's networks only; a testnet-wide row never names a mainnet node", async () => {
+  // Ryan's screenshot, 2026-11-19: the Testnet tab showed "3 ongoing" in red for three open
+  // mainnet stalls, and its own rows read "Compared with snapchain".
+  const cfg = {
+    ...loadConfig(),
+    nodes: [node("snapchain", "snapchain"), node("hypersnap", "hypersnap"), node("ohsnap", "hypersnap"), node("testnet-0", "hypersnap-testnet"), node("testnet-rn", "hypersnap-testnet")],
+    reference: "snapchain",
+    references: { snapchain: "snapchain", hypersnap: "hypersnap", "hypersnap-testnet": "testnet-0" },
+  };
+  const store = new SqliteStore(":memory:");
+  for (const n of cfg.nodes) await store.recordInfo(snap(n.label));
+  const now = Date.now();
+  // Three open mainnet stalls: ohsnap alone (node scope), and hypersnap-wide on two shards,
+  // measured against snapchain (both mainnets, both on the Mainnet tab).
+  await store.startStall({ side: "ohsnap", shardId: 1, stuckHeight: 100, scope: "node", peer: "hypersnap", peerHeightStart: 110, startedAt: now - 600_000 });
+  await store.startStall({ side: "hypersnap", shardId: 2, stuckHeight: 100, scope: "network", peer: "snapchain", peerHeightStart: 900, startedAt: now - 300_000 });
+  await store.startStall({ side: "ohsnap", shardId: 2, stuckHeight: 100, scope: "network", peer: "snapchain", peerHeightStart: 900, startedAt: now - 300_000 });
+  // One ended testnet-wide stall, measured against snapchain (the only healthy clock: src/stall.ts).
+  const t = await store.startStall({ side: "testnet-0", shardId: 0, stuckHeight: 4_499, scope: "network", peer: "snapchain", peerHeightStart: 50_000, startedAt: now - 48 * 3_600_000 });
+  await store.endStall(t, now - 47 * 3_600_000, 51_000);
+  const app = buildApp(cfg, store);
+  const main = await (await app.request("http://x/")).text();
+  const testnet = await (await app.request("http://x/?net=testnet")).text();
+  await store.close();
+  const section = (html: string) => html.slice(html.indexOf("<h2>Shard stalls"), html.indexOf("</section>", html.indexOf("<h2>Shard stalls")));
+
+  assert.match(main, /<h2>Shard stalls <span class="pill bad">3 ongoing<\/span>/, "the mainnet pill counts the three mainnet stalls");
+  const row = (html: string, start: string) => html.slice(html.indexOf(start), html.indexOf("</div>", html.indexOf(start)));
+  assert.match(row(section(main), "<span>hypersnap (network-wide)</span><span>2</span>"), /<span>snapchain<\/span><span>900<\/span>/, "a hypersnap-wide row still names snapchain on the Mainnet tab");
+  assert.doesNotMatch(section(main), /testnet-0/, "the testnet row stays off the Mainnet tab");
+
+  assert.match(testnet, /<h2>Shard stalls<\/h2>|<h2>Shard stalls<span/, "no ongoing pill: none of this tab's nodes is stalled");
+  assert.doesNotMatch(testnet, /ongoing/, "no open mainnet stall leaks into the Testnet tab");
+  assert.doesNotMatch(section(testnet), /snapchain|ohsnap|50,000|51,000/, "the testnet row names no mainnet node and shows no mainnet height");
+  assert.match(row(section(testnet), "<span>testnet-0 (network-wide)</span><span>0</span>"), /<span><span class="muted" title="Every hypersnap-testnet node was stopped on this shard[^"]*">whole network<\/span><\/span><span><span class="muted">n\/a<\/span><\/span>/);
+});

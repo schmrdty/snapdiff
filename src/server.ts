@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { embedJson, manifestJson } from "./miniapp.js";
+import { meshLine, type MeshSummary } from "./mesh.js";
 import { CLIENT_STATUSES, type ClientHealth, type ClientStatus } from "./clients.js";
 import { networks, nodeOf, type Config, isTestnetNetwork } from "./config.js";
 import { hostOf } from "./hub.js";
@@ -49,11 +50,35 @@ const CAUSE_HELP: Record<Cause, string> = {
 
 const isCause = (v: string | undefined): v is Cause => v !== undefined && (CAUSES as readonly string[]).includes(v);
 
-export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth[], releases?: () => Record<string, ReleaseState>, feed?: () => Record<string, FeedSnapshot>): Hono {
+export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth[], releases?: () => Record<string, ReleaseState>, feed?: () => Record<string, FeedSnapshot>, mesh?: () => Record<Side, MeshSummary>): Hono {
   const app = new Hono();
   // Node ids in the database ARE the configured labels; NODE_<LABEL>_NAME only changes how a
   // label is printed on this page (cards, stall and split tables). The API keeps the ids.
   const label = (s: Side) => nodeOf(cfg, s)?.name ?? s;
+  // Peer view (src/mesh.ts). A validator row names the snapdiff node behind it when that
+  // node's own mesh view told us its peer id; otherwise the row shows the key prefix and a
+  // shortened peer id. Only nodes on an enabled network kind have an entry (MESH_NETWORKS).
+  const meshSnap = (): Record<Side, MeshSummary> => mesh?.() ?? {};
+  // A plain object lookup: a label such as "constructor" must not read Object.prototype.
+  const meshOf = (snap: Record<Side, MeshSummary>, side: Side): MeshSummary | undefined => (Object.hasOwn(snap, side) ? snap[side] : undefined);
+  // Peer id to node name. A node keeps the id it last reported from an open view of its own
+  // provider, so one missed poll does not strip its name from every other card; a fallback
+  // provider's view is never used for naming (it may be another machine). Config order wins
+  // when two labels report the same id (one node listed twice).
+  const knownPeerIds = new Map<Side, string>();
+  const peerNames = (snap: Record<Side, MeshSummary>): Map<string, string> => {
+    for (const n of cfg.nodes) {
+      const v = meshOf(snap, n.label);
+      if (v !== undefined && !v.fallback && v.self?.peerId) knownPeerIds.set(n.label, v.self.peerId);
+    }
+    const m = new Map<string, string>();
+    for (const n of cfg.nodes) {
+      const id = knownPeerIds.get(n.label);
+      if (id !== undefined && !m.has(id)) m.set(id, label(n.label));
+    }
+    return m;
+  };
+  const shortPeer = (id: string) => `${id.slice(0, 12)}…`;
   // Header tile above each node card: "<network> reference" on every network's reference
   // (REFERENCE_NODE and the per-network references), "<network> node" on the rest, and
   // "validator" in place of "node" (or after "reference") when NODE_<K>_VALIDATOR is set, so a
@@ -99,6 +124,12 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
   // Testnet cast explorer (src/testnet-feed.ts): newest casts per testnet network, {} when off.
   app.get("/api/testnet/casts", (c) => c.json({ feeds: feed?.() ?? {} }));
 
+  // Peer view per node (src/mesh.ts) plus the peer id to node name map the page uses.
+  app.get("/api/mesh", (c) => {
+    const snap = meshSnap();
+    return c.json({ source: "currentPeers", mesh: snap, names: Object.fromEntries(peerNames(snap)), networks: cfg.meshNetworks, validatorSets: Object.keys(cfg.validatorSetUrls) });
+  });
+
   app.get("/api/stalls", async (c) => {
     const limit = Math.min(Number(c.req.query("limit") ?? 200) || 200, 5000);
     return c.json(await store.listStalls({ limit }));
@@ -133,6 +164,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       version: versionView(latest?.version, latestVersions(networkMap, infos)[node.network] ?? null),
       // Newest published version on this node's network (src/releases.ts), null when unknown or off.
       release: releases?.()[node.network] ?? null,
+      mesh: meshOf(meshSnap(), label) ?? null,
       latest,
       window: {
         hours,
@@ -207,7 +239,30 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     // Newest 2000 plus anything still open beyond them, each once, newest first.
     const stalls = [...recentStalls, ...openStalls.filter((o) => !recentStalls.some((r) => r.id === o.id))].filter((s) => inView.has(s.side)).sort((a, b) => b.startedAt - a.startedAt);
     const openStall = (side: Side, shardId: number) => stalls.some((s) => s.side === side && s.shardId === shardId && s.endedAt === null);
+    // The header pill counts the open stalls of this tab's nodes only. summary.openStalls is
+    // database-wide, so the Testnet tab was showing mainnet stalls in red (Ryan's screenshot,
+    // 2026-11-19).
+    const openInView = stalls.filter((s) => s.endedAt === null).length;
     const latestByNet = latestVersions(networkMap, infos);
+
+    // Peer view lines under the version: the one-line summary, then the validator rows for an
+    // open view. Nothing is printed for a node outside MESH_NETWORKS.
+    const meshAll = meshSnap();
+    const names = peerNames(meshAll);
+    const meshLines = (side: Side): string => {
+      const m = meshOf(meshAll, side);
+      if (m === undefined) return "";
+      // Current-set validators only; next-set peers stay in the API (validator false, joinsAt)
+      // and out of the row (Ryan, 2026-11-20: the "(joins at N)" suffixes were noise).
+      const rows = m.validators.filter((p) => p.validator).map((p) => {
+        const name = names.get(p.peerId);
+        const text = name ?? `${p.keyPrefix} ${shortPeer(p.peerId)}`;
+        return `<span class="peer" title="${esc(`${name ? `${name}, ` : ""}peer ${p.peerId}, key ${p.keyPrefix}…`)}">${esc(text)}</span>`;
+      });
+      const joins = m.self?.joinsAt ? ` Its own key enters the set at height ${m.self.joinsAt.toLocaleString("en-US")}.` : "";
+      const meshTitle = `Peer list read ${ago(m.at, now)} from this node. Role: whether this node's own key is in the current validator set.${joins} Connected: validators of the current set among its peers, out of the set minus itself.`;
+      return `<p class="muted mesh" title="${esc(meshTitle)}">peers: ${esc(meshLine(m).replace(/^peers: /, ""))}${m.fallback ? ", via fallback provider" : ""}</p>${rows.length > 0 ? `<p class="muted peers">validators: ${rows.join(", ")}</p>` : ""}`;
+    };
 
     const nodeCard = (side: Side, i: InfoSnapshot | null, extra: boolean) => {
       const status = i === null ? "no data" : i.reachable ? "up" : "down";
@@ -244,6 +299,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
         <p class="muted host" title="${esc(host)}">${esc(host)}</p>
         <p class="muted">checked ${ago(i?.at ?? null, now)}</p>
         ${verLine}
+        ${meshLines(side)}
         ${i?.note ? `<p class="warn">${esc(i.note)}</p>` : ""}
         ${i?.error ? `<p class="bad-text">Not answering: ${esc(i.error)}. Other nodes still are; nothing is lost, this one just cannot be compared until it is back.</p>` : ""}
         ${shards ? `<table><thead><tr><th>Shard</th><th>Height</th><th>Block delay</th></tr></thead><tbody>${shards}</tbody></table>` : ""}
@@ -308,7 +364,7 @@ ${list
 <td>${esc(h.network)}</td><td><span class="pill ${STATUS_CLASS[status]}">${status}</span></td>
 <td>${h.latencyMs === null ? "" : `${h.latencyMs} ms`}</td><td>${ago(h.checkedAt, now)}</td><td>${esc(h.note)}</td></tr>`;
   })
-  .join("")}</tbody></table></div></section>`;
+  .join("")}</tbody></table></div>${cfg.clientHealthCredit ? `<p class="muted" style="margin:8px 0 0">List from <a href="${esc(cfg.clientHealthCredit.url)}" rel="noopener noreferrer" target="_blank">${esc(cfg.clientHealthCredit.text)}</a>.</p>` : ""}</section>`;
 
     // A shard stalled on every node of one network is that network stalling, not a node:
     // either every label of the network has an open row, or the detector recorded the rows
@@ -367,8 +423,21 @@ ${nets
     // Ryan, 2026-11-10: one busy node was filling the whole table.
     // The first column is at least 210px and clips with an ellipsis: on a phone the 110px column let
     // "castrater (network-wide)" run under the shard digit (Ryan's screenshot, 2026-11-13).
+    // A network-wide row's peer is a clock, not a peering: the healthiest node elsewhere, kept
+    // as evidence that time passed (src/stall.ts). When that node sits on the other network
+    // kind it is not named on this tab and its height is not shown: a mainnet node and height
+    // on a testnet row read as a crossover (Ryan's screenshot, 2026-11-19). A peer on this
+    // tab's own kind (hypersnap against snapchain on the Mainnet tab) is shown as before.
+    const otherKind = (peer: Side | null): boolean => {
+      const n = peer === null ? undefined : nodeOf(cfg, peer);
+      return n !== undefined && isTestnet(n.network) !== (view === "testnet");
+    };
+    const peerCells = (s: StallRow) =>
+      otherKind(s.peer)
+        ? `<td><span class="muted" title="Every ${esc(nodeOf(cfg, s.side)?.network ?? "")} node was stopped on this shard. Its duration was measured against a node on another network, which this tab does not show.">whole network</span></td><td><span class="muted">n/a</span></td>`
+        : `<td>${s.peer ? esc(label(s.peer)) : ""}</td><td>${(s.peerHeightEnd ?? s.peerHeightStart).toLocaleString()}</td>`;
     const stallCells = (s: StallRow) =>
-      `<td>${new Date(s.startedAt).toISOString().replace("T", " ").slice(0, 19)}Z</td><td>${s.endedAt === null ? `<span class="pill bad">ongoing ${dur(s.startedAt, now)}</span>` : dur(s.startedAt, s.endedAt)}</td><td>${s.stuckHeight.toLocaleString()}</td><td>${s.peer ? esc(label(s.peer)) : ""}</td><td>${(s.peerHeightEnd ?? s.peerHeightStart).toLocaleString()}</td><td>${s.maxBlockDelay}s</td>`;
+      `<td>${new Date(s.startedAt).toISOString().replace("T", " ").slice(0, 19)}Z</td><td>${s.endedAt === null ? `<span class="pill bad">ongoing ${dur(s.startedAt, now)}</span>` : dur(s.startedAt, s.endedAt)}</td><td>${s.stuckHeight.toLocaleString()}</td>${peerCells(s)}<td>${s.maxBlockDelay}s</td>`;
     const stallsHtml = (rows: StallRow[]) => {
       if (rows.length === 0) return `<p class="muted">None recorded.</p>`;
       const groups = new Map<string, StallRow[]>();
@@ -400,9 +469,10 @@ ${nets
 <meta property="og:title" content="${esc(cfg.miniapp.name)}"><meta property="og:description" content="Snapchain and Hypersnap node health"><meta property="og:image" content="${esc(originOf(c))}/static/embed.png">
 <script type="module" src="/static/miniapp.mjs"></script>
 <style>
-:root{--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66;--card:#fff;--line:#e3e2dd;--ok:#2f7d4f;--bad:#b3261e;--warn:#9a6700;--fc:#8a63d2;--fc-bg:#f6f2fc;--fc-line:#c9b6ea;--tn:#a855f7;--tn-bg:#f5ecff;--tn-line:#d8b4fe}
-@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--muted:#9c9b95;--card:#1d1d1b;--line:#33322f;--ok:#5cc58a;--bad:#f2867c;--warn:#e0b44c;--fc:#8a63d2;--fc-bg:#231c33;--fc-line:#5d4a85;--tn:#b975ff;--tn-bg:#2a1b47;--tn-line:#7a52c4}}
+:root{--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66;--card:#fff;--line:#e3e2dd;--ok:#2f7d4f;--bad:#b3261e;--warn:#9a6700;--fc:#8a63d2;--fc-bg:#f6f2fc;--fc-line:#c9b6ea;--tn:#a855f7;--tn-bg:#f5ecff;--tn-line:#d8b4fe;--link:#1d4ed8}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--muted:#9c9b95;--card:#1d1d1b;--line:#33322f;--ok:#5cc58a;--bad:#f2867c;--warn:#e0b44c;--fc:#8a63d2;--fc-bg:#231c33;--fc-line:#5d4a85;--tn:#b975ff;--tn-bg:#2a1b47;--tn-line:#7a52c4;--link:#9db9ff}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
+a,a:visited{color:var(--link);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--link) 50%,transparent);text-underline-offset:2px}a:hover{text-decoration-color:var(--link)}
 main{max-width:1100px;margin:0 auto;padding:20px 16px}h1{font-size:20px;margin:0 0 4px}h2{font-size:16px;margin:0 0 4px}
 .muted{color:var(--muted);margin:0 0 8px}.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin:16px 0}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
@@ -424,6 +494,7 @@ td.text{white-space:normal;min-width:240px;max-width:460px}
 .col[data-net=hypersnap] .head{background:var(--fc);border-color:var(--fc);color:#fff}.col[data-net=hypersnap] .card{background:var(--fc-bg);border-color:var(--fc-line)}
 .col[data-net*=testnet] .head{background:var(--tn);border-color:var(--tn);color:#fff}.col[data-net*=testnet] .card{background:var(--tn-bg);border-color:var(--tn-line)}
 .tabs{display:flex;gap:8px;margin:0 0 12px}.tab{text-decoration:none;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:2px 12px;font-size:13px}.tab.on{color:#fff;background:var(--fc);border-color:var(--fc)}.tab.tn.on{background:var(--tn);border-color:var(--tn)}
+.peers .peer.off{color:var(--bad)}.peers .peer.next{color:var(--warn)}.mesh{margin-bottom:4px}
 .pager{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:16px 0 0}.pager .muted{margin:0}
 .pager button{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:2px 10px;font:inherit;cursor:pointer}
 .pager button:disabled{opacity:.4;cursor:default}
@@ -465,7 +536,7 @@ ${extraLabels.length > 0 ? `<div class="pager" id="pager" hidden><span class="mu
 ${view === "testnet" ? feedHtml() : ""}
 ${view === "mainnet" ? splitHtml() : ""}
 ${clientsHtml((clients?.() ?? []).filter((h) => isTestnet(h.network) === (view === "testnet")))}
-<section class="card" style="margin-bottom:12px"><h2>Shard stalls${summary.openStalls > 0 ? ` <span class="pill bad">${summary.openStalls} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}</h2>
+<section class="card" style="margin-bottom:12px"><h2>Shard stalls${openInView > 0 ? ` <span class="pill bad">${openInView} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}</h2>
 <p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer on the same network kept going. When every reachable node of a network is stalled on a shard the rows are marked network-wide: that network stopped deciding blocks. Diffs on a stalled shard stay pending until it recovers. One line per node and shard with its latest stall; the last column counts the past 7 days; a line with several stalls opens on click.</p>${stallsHtml(stalls)}</section>
 ${
   view === "mainnet"

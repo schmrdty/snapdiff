@@ -29,6 +29,8 @@ export interface ClientSpec {
   statusPath?: string | null;
   /** Values at statusPath that mean ok (case-insensitive). */
   okValues?: string[];
+  /** Values at statusPath that mean degraded even behind a non-2xx code (case-insensitive). */
+  degradedValues?: string[];
 }
 
 export interface ClientHealth {
@@ -46,6 +48,13 @@ export interface ClientHealth {
 }
 
 export const DEFAULT_OK_VALUES: readonly string[] = ["ok", "healthy", "up", "operational", "pass", "green"];
+/**
+ * Status words that mean "answering, but impaired". A client that returns them with a non-2xx
+ * code (the load-balancer convention: 503 plus a JSON body saying "degraded") is shown as
+ * degraded, not down. Vibeshift's owner, 2026-11-20: their health route answered 503 with
+ * status "degraded" while their node was stalled, and the page read "down".
+ */
+export const DEFAULT_DEGRADED_VALUES: readonly string[] = ["degraded", "partial", "impaired", "warn", "warning", "yellow", "amber"];
 export const HEALTH_TIMEOUT_MS = 5000;
 // 64 KB: a node observatory feed (stats.opencaster.org/api/current, 19 KB) is a health source too.
 export const HEALTH_MAX_BODY = 64 * 1024;
@@ -91,6 +100,11 @@ export function parseClients(json: string): ClientSpec[] {
         throw new Error(`${where}: statusPath must be a dot path of identifiers (at most ${PATH_MAX_DEPTH} deep) or null`);
       }
     }
+    if (c.degradedValues !== undefined) {
+      if (!Array.isArray(c.degradedValues) || !c.degradedValues.every((v) => typeof v === "string" && v.length > 0 && v.length <= LABEL_MAX)) {
+        throw new Error(`${where}: degradedValues must be an array of short strings`);
+      }
+    }
     if (c.okValues !== undefined) {
       if (!Array.isArray(c.okValues) || !c.okValues.every((v) => typeof v === "string" && v.length > 0 && v.length <= LABEL_MAX)) {
         throw new Error(`${where}: okValues must be an array of short strings`);
@@ -100,6 +114,7 @@ export function parseClients(json: string): ClientSpec[] {
     if (c.healthUrl !== undefined) spec.healthUrl = c.healthUrl;
     if (c.statusPath !== undefined) spec.statusPath = c.statusPath as string | null;
     if (c.okValues !== undefined) spec.okValues = c.okValues as string[];
+    if (c.degradedValues !== undefined) spec.degradedValues = c.degradedValues as string[];
     out.push(spec);
   });
   return out;
@@ -144,7 +159,10 @@ export async function checkClient(c: ClientSpec, fetchFn: FetchLike = fetch, now
       method: "GET",
       redirect: "error",
       signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
-      headers: { accept: "application/json, text/plain;q=0.5" },
+      // Any type is acceptable: a site that negotiates content strictly answered 406 to a
+      // JSON-only accept header and read as down (Charge Sheet, 2026-11-20). The body is
+      // only parsed when statusPath is set, and then only as JSON.
+      headers: { accept: "application/json, text/plain;q=0.5, */*;q=0.1" },
     });
   } catch (e) {
     const name = e instanceof Error ? e.name : "";
@@ -154,23 +172,32 @@ export async function checkClient(c: ClientSpec, fetchFn: FetchLike = fetch, now
   }
   const latencyMs = now() - t0;
   const withRes = { ...base, httpStatus: res.status, latencyMs };
-  if (!res.ok) return { ...withRes, status: "down", note: `HTTP ${res.status}` };
-  if (c.statusPath === null) return { ...withRes, status: "ok", note: "HTTP 200" };
+  if (c.statusPath === null) return res.ok ? { ...withRes, status: "ok", note: "HTTP 200" } : { ...withRes, status: "down", note: `HTTP ${res.status}` };
+  // A non-2xx answer is down unless its JSON body carries a status word we recognise: an ok or
+  // degraded word with an error code means "up but impaired" (degraded, with both in the note);
+  // any other word, or no readable word, keeps the HTTP verdict.
+  const httpDown = { ...withRes, status: "down" as const, note: `HTTP ${res.status}` };
   let text: string;
   try {
     text = await res.text();
   } catch {
-    return { ...withRes, status: "unknown", note: "unreadable body" };
+    return res.ok ? { ...withRes, status: "unknown", note: "unreadable body" } : httpDown;
   }
-  if (text.length > HEALTH_MAX_BODY) return { ...withRes, status: "unknown", note: "body too large" };
+  if (text.length > HEALTH_MAX_BODY) return res.ok ? { ...withRes, status: "unknown", note: "body too large" } : httpDown;
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
-    return { ...withRes, status: "unknown", note: "not JSON" };
+    return res.ok ? { ...withRes, status: "unknown", note: "not JSON" } : httpDown;
   }
   const value = dig(body, c.statusPath ?? "status");
   const okValues = (c.okValues ?? DEFAULT_OK_VALUES).map((v) => v.toLowerCase());
+  const degradedValues = (c.degradedValues ?? DEFAULT_DEGRADED_VALUES).map((v) => v.toLowerCase());
+  if (!res.ok) {
+    const v = typeof value === "string" ? value.trim().toLowerCase() : null;
+    if (v !== null && (okValues.includes(v) || degradedValues.includes(v))) return { ...withRes, status: "degraded", note: `HTTP ${res.status}, status "${String(value).trim().slice(0, 40)}"` };
+    return httpDown;
+  }
   if (typeof value === "boolean") return { ...withRes, status: value ? "ok" : "degraded", note: `status ${value}` };
   if (typeof value === "string") {
     const v = value.trim().toLowerCase();

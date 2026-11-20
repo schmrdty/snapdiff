@@ -1,0 +1,60 @@
+{
+ "contacts": [
+  {
+   "gossip_address": "/ip4/198.51.100.1/udp/4382/quic-v1",
+   "announce_rpc_address": "http://198.51.100.1:3383",
+   "peer_id": "12D3KooWKgXEoET55p4ZPwNxANunvCgd1hNzSn8QpEoLvHkvmCwC",
+   "snapchain_version": "13",
+   "network": "Testnet",
+   "timestamp": 1795200757031,
+   "capabilities": [
+    "hyper:v1"
+   ]
+  },
+  {
+   "gossip_address": "/ip4/198.51.100.1/udp/5382/quic-v1",
+   "announce_rpc_address": "http://198.51.100.1:3383",
+   "peer_id": "12D3KooWPqAiKeG2EPkFvWWoYL92542ysJZ4xFtSE1gaZYstnMwA",
+   "snapchain_version": "13",
+   "network": "Testnet",
+   "timestamp": 1795200780655,
+   "capabilities": [
+    "hyper:v1"
+   ]
+  }
+ ],
+ "peers": [
+  {
+   "source": "collected",
+   "peer_id": "12D3KooWKgXEoET55p4ZPwNxANunvCgd1hNzSn8QpEoLvHkvmCwC",
+   "observed_address": "/ip4/198.51.100.1/udp/4382/quic-v1/p2p/12D3KooWKgXEoET55p4ZPwNxANunvCgd1hNzSn8QpEoLvHkvmCwC",
+   "contact_info": {
+    "gossip_address": "/ip4/198.51.100.1/udp/4382/quic-v1",
+    "announce_rpc_address": "http://198.51.100.1:3383",
+    "peer_id": "12D3KooWKgXEoET55p4ZPwNxANunvCgd1hNzSn8QpEoLvHkvmCwC",
+    "snapchain_version": "13",
+    "network": "Testnet",
+    "timestamp": 1795200757031,
+    "capabilities": [
+     "hyper:v1"
+    ]
+   }
+  },
+  {
+   "source": "collected",
+   "peer_id": "12D3KooWPqAiKeG2EPkFvWWoYL92542ysJZ4xFtSE1gaZYstnMwA",
+   "observed_address": "/ip4/198.51.100.1/udp/5382/quic-v1/p2p/12D3KooWPqAiKeG2EPkFvWWoYL92542ysJZ4xFtSE1gaZYstnMwA",
+   "contact_info": {
+    "gossip_address": "/ip4/198.51.100.1/udp/5382/quic-v1",
+    "announce_rpc_address": "http://198.51.100.1:3383",
+    "peer_id": "12D3KooWPqAiKeG2EPkFvWWoYL92542ysJZ4xFtSE1gaZYstnMwA",
+    "snapchain_version": "13",
+    "network": "Testnet",
+    "timestamp": 1795200780655,
+    "capabilities": [
+     "hyper:v1"
+    ]
+   }
+  }
+ ]
+}

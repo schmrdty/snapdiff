@@ -5,7 +5,9 @@ import { HubClient } from "./hub.js";
 import { every, pollInfo, recheckOnce, scanOnce, type Deps } from "./loops.js";
 import { ReleaseMonitor } from "./releases.js";
 import { TestnetFeed } from "./testnet-feed.js";
-import { isTestnetNetwork } from "./config.js";
+import { isTestnetNetwork, meshNodes } from "./config.js";
+import { MeshMonitor } from "./mesh.js";
+import { resolveSets, ValidatorSetMonitor } from "./validators.js";
 import { buildApp } from "./server.js";
 import { SqliteStore } from "./store/sqlite.js";
 import type { Store } from "./store/store.js";
@@ -96,7 +98,31 @@ if (feed) {
   stops.push(every(cfg.testnetFeedIntervalMs, "testnet-feed", () => feed.runAll(), log));
 }
 
-const server = serve({ fetch: buildApp(cfg, store, monitor ? () => monitor.snapshot() : undefined, releases ? () => releases.snapshot() : undefined, feed ? () => feed.snapshot() : undefined).fetch, port: cfg.port, hostname: "0.0.0.0" });
+// Peer view (src/mesh.ts): /v1/currentPeers from every node on an enabled network kind,
+// every MESH_INTERVAL_SEC, classified against the validators file of the node's network
+// (src/validators.ts, refetched every VALIDATOR_SET_INTERVAL_SEC from this server).
+const meshLabels = meshNodes(cfg).map((n) => n.label);
+const validatorSets = meshLabels.length > 0 ? new ValidatorSetMonitor(cfg.validatorSetUrls, log) : null;
+if (validatorSets) {
+  log(`validators: ${Object.keys(cfg.validatorSetUrls).join(", ")} every ${Math.round(cfg.validatorSetIntervalMs / 3600000)}h`);
+  await validatorSets.runAll().catch((e: unknown) => log(`[validators] ${String(e)}`));
+  stops.push(every(cfg.validatorSetIntervalMs, "validators", () => validatorSets.runAll(), log));
+}
+const resolve = (side: string) => {
+  const node = cfg.nodes.find((n) => n.label === side);
+  const sets = node && validatorSets ? validatorSets.sets(node.network) : null;
+  if (!sets) return null;
+  const hub = deps.hubs[side];
+  return resolveSets(sets, (shardId) => hub?.lastShards.find((s) => s.shardId === shardId)?.maxHeight ?? null);
+};
+const mesh = meshLabels.length > 0 ? new MeshMonitor(Object.fromEntries(meshLabels.map((l) => [l, deps.hubs[l]!])), { resolve }, log) : null;
+if (mesh) {
+  log(`peers: ${cfg.meshNetworks.join(" and ")} nodes (${meshLabels.join(", ")}), every ${Math.round(cfg.meshIntervalMs / 1000)}s`);
+  await mesh.runAll().catch((e: unknown) => log(`[peers] ${String(e)}`));
+  stops.push(every(cfg.meshIntervalMs, "peers", () => mesh.runAll(), log));
+}
+
+const server = serve({ fetch: buildApp(cfg, store, monitor ? () => monitor.snapshot() : undefined, releases ? () => releases.snapshot() : undefined, feed ? () => feed.snapshot() : undefined, mesh ? () => mesh.snapshot() : undefined).fetch, port: cfg.port, hostname: "0.0.0.0" });
 log(`dashboard: http://localhost:${cfg.port}`);
 
 const shutdown = async () => {

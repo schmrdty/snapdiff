@@ -48,9 +48,21 @@ test("status derivation: ok, degraded, down, unknown", async () => {
   const degraded = await checkClient(spec(), respond(200, '{"status":"maintenance"}'));
   assert.equal(degraded.status, "degraded");
   assert.equal(degraded.note, 'status "maintenance"');
-  const down = await checkClient(spec(), respond(503, '{"status":"ok"}'));
+  // A non-2xx code with a recognised status word in the body is degraded, not down (Vibeshift,
+  // 2026-11-20: 503 with {"status":"degraded"} while its node was stalled). Anything else
+  // behind an error code keeps the HTTP verdict.
+  const contradiction = await checkClient(spec(), respond(503, '{"status":"ok"}'));
+  assert.equal(contradiction.status, "degraded");
+  assert.equal(contradiction.note, 'HTTP 503, status "ok"');
+  const impaired = await checkClient(spec(), respond(503, '{"schemaVersion":4,"status":"degraded","checks":{"hypersnap":{"syncStatus":"degraded"}}}'));
+  assert.equal(impaired.status, "degraded");
+  assert.equal(impaired.note, 'HTTP 503, status "degraded"');
+  const down = await checkClient(spec(), respond(503, '{"status":"outage"}'));
   assert.equal(down.status, "down");
   assert.equal(down.note, "HTTP 503");
+  assert.equal((await checkClient(spec(), respond(503, "<html>bad gateway</html>"))).status, "down", "an error page is down");
+  assert.equal((await checkClient(spec({ statusPath: null }), respond(503, '{"status":"degraded"}'))).status, "down", "statusPath null never reads a body");
+  assert.equal((await checkClient(spec({ degradedValues: ["limping"] }), respond(500, '{"status":"limping"}'))).status, "degraded", "degradedValues is configurable");
   assert.equal((await checkClient(spec(), respond(200, "not json"))).status, "unknown");
   assert.equal((await checkClient(spec(), respond(200, '{"other":1}'))).note, "no status field");
   assert.equal((await checkClient(spec({ statusPath: null }), respond(200, "<html>fine</html>"))).status, "ok", "statusPath null = any 200");
@@ -97,3 +109,34 @@ test("the monitor holds the latest result per client and logs status changes", a
 function pick(h: { status: string; note: string }): { status: string; note: string } {
   return { status: h.status, note: h.note };
 }
+
+test("credit line: both env vars render a link under the card, one alone is a startup error, https only", async () => {
+  const { parseCredit } = await import("../src/config.js");
+  assert.equal(parseCredit("", ""), null);
+  assert.deepEqual(parseCredit(" the list ", "https://example.test/list"), { text: "the list", url: "https://example.test/list" });
+  assert.throws(() => parseCredit("x", ""), /set together/);
+  assert.throws(() => parseCredit("x", "http://example.test"), /https/);
+  assert.throws(() => parseCredit("x".repeat(121), "https://example.test"), /120/);
+  const { loadConfig } = await import("../src/config.js");
+  const { buildApp } = await import("../src/server.js");
+  const { SqliteStore } = await import("../src/store/sqlite.js");
+  const cfg = { ...loadConfig(), nodes: [{ label: "a", url: "http://a.test", network: "snapchain", headers: {}, providers: [] }], reference: "a", references: { snapchain: "a" }, clientHealthCredit: { text: "a list on GitHub", url: "https://example.test/list" } };
+  const store = new SqliteStore(":memory:");
+  const health = [{ label: "X", network: "snapchain" as const, siteUrl: "https://x.test", siteHost: "x.test", healthUrl: null, status: "unknown" as const, httpStatus: null, latencyMs: null, checkedAt: null, note: "" }];
+  const html = await (await buildApp(cfg as never, store, () => health).request("http://x/")).text();
+  const plain = await (await buildApp({ ...cfg, clientHealthCredit: null } as never, store, () => health).request("http://x/")).text();
+  await store.close();
+  assert.match(html, /<p class="muted" style="margin:8px 0 0">List from <a href="https:\/\/example.test\/list" rel="noopener noreferrer" target="_blank">a list on GitHub<\/a>.<\/p><\/section>/);
+  assert.doesNotMatch(plain, /List from/);
+});
+
+test("the probe accepts any content type, so a strictly negotiating site is not read as down", async () => {
+  let accept = "";
+  const fetchFn = (async (_url: string, init: RequestInit) => {
+    accept = String((init.headers as Record<string, string>)["accept"]);
+    return accept.includes("*/*") ? new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } }) : new Response("", { status: 406 });
+  }) as unknown as typeof fetch;
+  const r = await checkClient(spec({ statusPath: null }), fetchFn);
+  assert.equal(r.status, "ok");
+  assert.match(accept, /application\/json.*\*\/\*/);
+});

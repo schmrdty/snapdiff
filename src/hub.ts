@@ -214,6 +214,31 @@ export class HubClient {
     throw lastError ?? new HubError(primary ? `${this.nameOf(0)}: ${primary.why}` : "no provider answered", null);
   }
 
+  /** The node's own peer id, from the last successful /v1/info; null before that. */
+  peerId: string | null = null;
+  /** Shard heights from the last successful /v1/info, for resolving the validator set. */
+  lastShards: ReadonlyArray<{ shardId: number; maxHeight: number }> = [];
+
+  /**
+   * /v1/currentPeers from the active provider only, never through get(): a node that gates
+   * the route would answer 401, and get() would bench the provider for every other call. A
+   * provider that refused us (401/402/403/429 on another call) is left alone until its bench
+   * expires. Status 0 means no answer. `fallback` says the answer came from a fallback
+   * provider, which may be a different machine than the configured node.
+   */
+  async peers(): Promise<{ status: number; body: unknown; fallback: boolean }> {
+    const fallback = this.active !== 0;
+    const p = this.providers[this.active];
+    if (p === undefined) return { status: 0, body: null, fallback };
+    const b = this.benched.get(this.active);
+    if (b !== undefined && b.refused && this.now() < b.until) return { status: 0, body: null, fallback };
+    try {
+      return { ...(await this.fetchOnce(p, "/v1/currentPeers")), fallback };
+    } catch {
+      return { status: 0, body: null, fallback };
+    }
+  }
+
   async info(): Promise<InfoSnapshot> {
     const at = Date.now();
     try {
@@ -226,6 +251,7 @@ export class HubClient {
         numShards?: number;
         shardInfos?: Array<Partial<ShardInfo>>;
         version?: unknown;
+        peer_id?: unknown;
       };
       // A 200 is not enough: a status page on the node's domain answered /v1/info with
       // {"online": true} and would have shown as a healthy node with no shards (homiehouse,
@@ -241,6 +267,11 @@ export class HubClient {
         ...(s.numMessages !== undefined ? { numMessages: Number(s.numMessages) } : {}),
       }));
       const delays = shards.map((s) => s.blockDelay);
+      // Only from the configured node itself: a fallback provider is another machine.
+      if (this.active === 0) {
+        if (typeof b.peer_id === "string" && /^12D3KooW[1-9A-HJ-NP-Za-km-z]{44}$/.test(b.peer_id)) this.peerId = b.peer_id;
+        this.lastShards = shards.map((x) => ({ shardId: x.shardId, maxHeight: x.maxHeight }));
+      }
       return {
         side: this.side,
         at,
