@@ -92,3 +92,26 @@ test("tabs: the stall pill and the stall rows carry this tab's networks only; a 
   assert.doesNotMatch(section(testnet), /snapchain|ohsnap|50,000|51,000/, "the testnet row names no mainnet node and shows no mainnet height");
   assert.match(row(section(testnet), "<span>testnet-0 (network-wide)</span><span>0</span>"), /<span><span class="muted" title="Every hypersnap-testnet node was stopped on this shard[^"]*">whole network<\/span><\/span><span><span class="muted">n\/a<\/span><\/span>/);
 });
+
+test("node index: every node of the view is listed once and links to a card that is on the page; no pager", async () => {
+  const cfg = {
+    ...loadConfig(),
+    nodes: [node("snapchain", "snapchain"), { ...node("hypersnap", "hypersnap"), validator: true }, { ...node("val.two", "hypersnap"), validator: true, name: "second" }, node("reader", "hypersnap"), node("testnet-0", "hypersnap-testnet")],
+    reference: "snapchain",
+    references: { snapchain: "snapchain", hypersnap: "hypersnap", "hypersnap-testnet": "testnet-0" },
+  };
+  const store = new SqliteStore(":memory:");
+  for (const l of ["snapchain", "hypersnap", "val.two", "reader", "testnet-0"]) await store.recordInfo(snap(l));
+  const html = await (await buildApp(cfg, store).request("http://x/")).text();
+  await store.close();
+  const index = html.slice(html.indexOf('id="index"'), html.indexOf('id="nodes"'));
+  const links = [...index.matchAll(/<a class="irow" href="#node-([^"]+)"/g)].map((m) => decodeURIComponent(m[1]!));
+  assert.deepEqual(links, ["snapchain", "hypersnap", "val.two", "reader"], "reference, then validators, then read nodes; testnet nodes stay on their tab");
+  for (const l of links) assert.ok(html.includes(`<div class="col" id="node-${l}"`), `card for ${l} is on the page`);
+  assert.match(index, /hypersnap <span class="muted">2 validators, 1 read node<\/span>/);
+  assert.match(index, /<span class="iname">second<\/span>/, "the display name, not the label");
+  assert.ok(!html.includes('id="pager"'), "no pager element, so the inline script does nothing and no card is hidden");
+  assert.equal((html.match(/<script>/g) ?? []).length, 1, "the inline script is unchanged (its hash is pinned in the Caddyfile)");
+  assert.ok(html.includes('href="#stalls"') && html.includes('id="stalls"'), "jump link to the stalls card");
+  assert.ok(!html.includes('href="#consensus"') && !html.includes('href="#clients"'), "no jump link to a card this deployment does not render");
+});

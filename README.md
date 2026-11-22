@@ -158,6 +158,15 @@ See `.env.example`. Every value has a default. Sizing the net: with the defaults
 
 Each node card compares the node to two bars. `behind X` (red) means a reachable node on the same network already runs X. `X published` (amber) means the project has pushed X to its image registry and no node on the network runs it yet, so this is the earlier of the two. The feed is the Docker Hub tag list of each network's image (`src/releases.ts`), fetched from the server every `RELEASE_INTERVAL_MIN` minutes; the only thing read from a response is a numeric tag and its push time. `RELEASE_FEED_<NETWORK>` overrides the URL or turns a network off (`off`). Hypersnap has no GitHub releases for its 0.17.x line, so the registry is the release list.
 
+## Node index
+
+The page opens with one line per node of the tab: name, up or down, version, role, and the
+block delay on each shard (red when that shard is stalled on that node, red version when it is
+behind). The reference comes first in each network, then validators, then read nodes. A line
+links to the node's card further down; every card renders, none is paged. A bar of section
+links stays at the top while scrolling. On a narrow screen the count tiles shrink to one row
+and the cards go to a single column.
+
 ## Consensus view
 
 The Consensus card (and `/api/consensus`, and the bot's `/consensus`) answers "how many of the

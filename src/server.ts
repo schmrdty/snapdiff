@@ -330,7 +330,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       // the title) instead of breaking mid-word, and "checked" sits on the next line so every
       // card has the same shape. Ryan, 2026-11-11: a wrapped host pushed the dot onto line two.
       const host = `${i?.provider ?? (nodeOf(cfg, side)?.private ? side : hostOf(nodeOf(cfg, side)?.url ?? ""))}${(nodeOf(cfg, side)?.providers.length ?? 1) > 1 ? ` (${nodeOf(cfg, side)?.providers.length} providers)` : ""}`;
-      return `<div class="col" data-net="${esc(nodeOf(cfg, side)?.network ?? "")}"${extra ? " data-extra" : " data-pin"}>${headTile(side)}<section class="card">
+      return `<div class="col" id="node-${esc(side)}" data-net="${esc(nodeOf(cfg, side)?.network ?? "")}"${extra ? " data-extra" : " data-pin"}>${headTile(side)}<section class="card">
         <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span></h2>
         <p class="muted host" title="${esc(host)}">${esc(host)}</p>
         <p class="muted">checked ${ago(i?.at ?? null, now)}</p>
@@ -339,9 +339,53 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
         ${i?.note ? `<p class="warn">${esc(i.note)}</p>` : ""}
         ${i?.error ? `<p class="bad-text">Not answering: ${esc(i.error)}. Other nodes still are; nothing is lost, this one just cannot be compared until it is back.</p>` : ""}
         ${shards ? `<table><thead><tr><th>Shard</th><th>Height</th><th>Block delay</th></tr></thead><tbody>${shards}</tbody></table>` : ""}
+        <p class="muted back"><a href="#index">all nodes</a></p>
       </section></div>`;
     };
 
+    // Node index: every node of the view on one screen, one line each, linking to its card.
+    // Two people reported in 2026-11 that a specific validator was hard to reach: the cards
+    // were paged with arrows, and on a phone one node showed at a time. The index answers
+    // "is my validator fine" without scrolling, and the cards below all render at once.
+    // Within a network: the reference first, then validators, then read nodes, each in
+    // config order. Links are plain anchors, so the page still has no script of its own here.
+    const fmtDelay = (sec: number): string => (sec < 120 ? `${sec}s` : sec < 7200 ? `${Math.round(sec / 60)}m` : `${(sec / 3600).toFixed(1)}h`);
+    const indexRow = (side: Side): string => {
+      const n = nodeOf(cfg, side);
+      const i = infos[side] ?? null;
+      const ver = versionView(i?.version, latestByNet[n?.network ?? ""] ?? null);
+      const isRef = Object.values(cfg.references).includes(side);
+      const role = `${n?.validator ? "validator" : "read node"}${isRef ? ", reference" : ""}`;
+      const shardCells =
+        i === null
+          ? `<span class="muted">no data yet</span>`
+          : !i.reachable
+            ? `<span class="bad-text">not answering</span>`
+            : i.shards
+                .slice()
+                .sort((x, y) => x.shardId - y.shardId)
+                .map((x) => `<span class="sh${openStall(side, x.shardId) ? " bad" : ""}" title="shard ${x.shardId}: height ${x.maxHeight.toLocaleString("en-US")}, block delay ${x.blockDelay} s${openStall(side, x.shardId) ? ", stalled" : ""}"><i>${x.shardId}</i>${fmtDelay(x.blockDelay)}</span>`)
+                .join("");
+      return `<a class="irow" href="#node-${esc(encodeURIComponent(side))}"><span class="iname">${esc(label(side))}</span><span class="pill ${i?.reachable ? "ok" : "bad"}">${i === null ? "no data" : i.reachable ? "up" : "down"}</span><span class="iver${ver.behind ? " bad" : ""}"${ver.behind ? ` title="behind ${esc(ver.latest ?? "")}"` : ""}>${ver.current ? `v${esc(ver.current)}` : ""}</span><span class="irole">${role}</span><span class="ish">${shardCells}</span></a>`;
+    };
+    const indexHtml = (): string =>
+      `<section class="card idx" id="index"><h2>Nodes</h2>
+<p class="muted">Tap a node to view its card.</p>
+${nets
+  .map(({ network, labels }) => {
+    const refs = labels.filter((l) => Object.values(cfg.references).includes(l));
+    const vals = labels.filter((l) => !refs.includes(l) && nodeOf(cfg, l)?.validator);
+    const readers = labels.filter((l) => !refs.includes(l) && !nodeOf(cfg, l)?.validator);
+    const nVal = labels.filter((l) => nodeOf(cfg, l)?.validator).length;
+    return `<h3>${esc(network)} <span class="muted">${nVal} validator${nVal === 1 ? "" : "s"}, ${labels.length - nVal} read node${labels.length - nVal === 1 ? "" : "s"}</span></h3>
+<div class="irows">${[...refs, ...vals, ...readers].map(indexRow).join("")}</div>`;
+  })
+  .join("")}</section>`;
+
+    // Since 2026-11-22 every card renders and nothing is paged. The data-pin and data-extra
+    // attributes and the inline pager script below are kept unchanged on purpose: the script's
+    // hash is pinned in deploy/Caddyfile (test/csp.test.ts), and with no pager element it
+    // returns at once. Removing it means changing the Caddy CSP in the same deploy.
     // Node cards: the first configured node of every network is pinned on the left
     // (with two networks that is the reference and its first peer); any further
     // nodes share the remaining slots and page with the arrows. Pure presentation.
@@ -393,7 +437,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       const all = consensusAll(infos);
       const rows = networksInView.flatMap((n) => (all[n] ?? []).map((r) => [n, r] as const));
       if (rows.length === 0) return "";
-      return `<section class="card" style="margin-bottom:12px"><h2>Consensus</h2>
+      return `<section class="card" id="consensus" style="margin-bottom:12px"><h2>Consensus</h2>
 <p class="muted">Per shard: validators of the set in force whose node is at the tip and can vote, against the signatures a block needs (more than two thirds of the set). Read from each node's own heights and the published validators file. Block signers are not on the HTTP API, so "can vote" is the nearest measurable thing to "signing"; a validator snapdiff does not monitor is counted as unknown, never as a vote.</p>
 <div class="scroll"><table><thead><tr><th>Network</th><th>Shard</th><th>Can vote</th><th>Quorum</th><th>Behind</th><th>Down</th><th>Not monitored</th></tr></thead><tbody>
 ${rows
@@ -404,7 +448,7 @@ ${rows
     const clientsHtml = (list: ClientHealth[]) =>
       list.length === 0
         ? ""
-        : `<section class="card" style="margin-bottom:12px"><h2>Clients</h2>
+        : `<section class="card" id="clients" style="margin-bottom:12px"><h2>Clients</h2>
 <p class="muted">Apps people use on each network, checked every ${Math.round(cfg.clientHealthIntervalMs / 1000)} s against the status endpoint each one publishes. Links go to the client's own site.</p>
 <div class="scroll"><table><thead><tr><th>Client</th><th>Network</th><th>Status</th><th>Latency</th><th>Checked</th><th>Note</th></tr></thead><tbody>
 ${list
@@ -459,13 +503,13 @@ ${rows === "" ? `<p class="muted">No casts yet. Register an account and post one
 
     const splitHtml = () => `<section class="card" style="margin-bottom:12px"><h2>Network split</h2>
 <p class="muted">A cast missing on every node of a network is a disagreement between the networks (scope "network"). A cast missing on one node while another node on its network has it is that node's problem (scope "node"). Unexplained by scope: node ${summary.byScope.node}, network ${summary.byScope.network}. Judged when each row is first seen, from the nodes that answered.</p>
-<table><thead><tr><th>Network</th><th>Nodes</th><th>Casts missing on all its nodes: unexplained</th><th>pending</th></tr></thead><tbody>
+<div class="scroll"><table><thead><tr><th>Network</th><th>Nodes</th><th>Casts missing on all its nodes: unexplained</th><th>pending</th></tr></thead><tbody>
 ${nets
   .map(
     ({ network, labels }) =>
       `<tr><td>${esc(network)}</td><td>${labels.map((l) => esc(label(l))).join(", ")}</td><td>${(summary.networkSplit[network]?.unexplained ?? 0) > 0 ? `<span class="pill bad">${summary.networkSplit[network]?.unexplained}</span>` : "0"}</td><td>${summary.networkSplit[network]?.pending ?? 0}</td></tr>`,
   )
-  .join("")}</tbody></table></section>`;
+  .join("")}</tbody></table></div></section>`;
 
     // One line per node and shard, newest first: its latest stall (any age) plus how many and how
     // long in the last 7 days. A pair with more than one stall opens on click to list them all (<details>:
@@ -545,6 +589,18 @@ td.text{white-space:normal;min-width:240px;max-width:460px}
 .col[data-net*=testnet] .head{background:var(--tn);border-color:var(--tn);color:#fff}.col[data-net*=testnet] .card{background:var(--tn-bg);border-color:var(--tn-line)}
 .tabs{display:flex;gap:8px;margin:0 0 12px}.tab{text-decoration:none;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:2px 12px;font-size:13px}.tab.on{color:#fff;background:var(--fc);border-color:var(--fc)}.tab.tn.on{background:var(--tn);border-color:var(--tn)}
 .peers .peer.off{color:var(--bad)}.peers .peer.next{color:var(--warn)}.mesh{margin-bottom:4px}
+.jump{position:sticky;top:0;z-index:5;display:flex;gap:6px;overflow-x:auto;padding:8px 0;margin:8px 0 4px;background:var(--bg);border-bottom:1px solid var(--line)}
+.jump a{flex:none;text-decoration:none;color:var(--fg);border:1px solid var(--line);border-radius:99px;padding:3px 12px;font-size:13px;background:var(--card)}
+[id]{scroll-margin-top:52px}.idx h3{font-size:13px;margin:12px 0 2px;text-transform:uppercase;letter-spacing:.04em}.idx h3 .muted{text-transform:none;letter-spacing:0;font-weight:400}
+.irows{display:grid}.irow,.irow:visited{display:grid;grid-template-columns:minmax(96px,1.3fr) 60px 82px minmax(120px,1fr) minmax(170px,1.5fr);gap:2px 10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--line);text-decoration:none;color:var(--fg);font-size:14px}
+.irow:hover{background:color-mix(in srgb,var(--line) 45%,transparent)}.iname{font-weight:600;color:var(--link);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.irow .pill{justify-self:start}
+.iver,.irole{color:var(--muted);font-size:13px;white-space:nowrap}.iver.bad{color:var(--bad)}.ish{display:flex;gap:6px;justify-content:flex-end;font-variant-numeric:tabular-nums}
+.sh{border:1px solid var(--line);border-radius:6px;padding:0 6px;font-size:13px;white-space:nowrap}.sh i{font-style:normal;color:var(--muted);margin-right:4px;font-size:11px}.sh.bad{border-color:var(--bad)}
+.back{margin:8px 0 0;font-size:13px}
+@media (max-width:640px){main{padding:12px 10px}h1{font-size:17px}
+.stats{grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:10px 0}.stat{padding:8px 4px;text-align:center}.stat .n{font-size:20px}.stat .k{font-size:9px;letter-spacing:0}.stat .help{display:none}
+.irow,.irow:visited{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"name pill ver" "role sh sh";padding:8px 2px}.iname{grid-area:name}.irow .pill{grid-area:pill}.iver{grid-area:ver;text-align:right}.irole{grid-area:role}.ish{grid-area:sh}
+.nodes{grid-template-columns:1fr}}
 .pager{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:16px 0 0}.pager .muted{margin:0}
 .pager button{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:2px 10px;font:inherit;cursor:pointer}
 .pager button:disabled{opacity:.4;cursor:default}
@@ -561,7 +617,8 @@ ${
 <div class="stats">${counts}</div>`
     : `<p class="muted">Node health and shard stalls for the testnet. The cast relay comparison on the Mainnet tab does not apply here. This page reloads every 30 s. Read-only.</p>`
 }
-${extraLabels.length > 0 ? `<div class="pager" id="pager" hidden><span class="muted">More ${esc(nets.find((n) => n.labels.length > 1)?.network ?? "")} nodes</span><button type="button" id="prev" aria-label="Earlier nodes">&larr;</button><span id="pagei" class="muted"></span><button type="button" id="next" aria-label="Later nodes">&rarr;</button></div>` : ""}
+<nav class="jump" aria-label="Sections"><a href="#index">Nodes</a><a href="#nodes">Cards</a>${consensusHtml(nets.map((n) => n.network)) ? `<a href="#consensus">Consensus</a>` : ""}${(clients?.() ?? []).some((h) => isTestnet(h.network) === (view === "testnet")) ? `<a href="#clients">Clients</a>` : ""}<a href="#stalls">Stalls</a></nav>
+${indexHtml()}
 <div class="grid nodes" id="nodes">${[...pinnedLabels, ...extraLabels].map((l) => nodeCard(l, infos[l] ?? null, extraSet.has(l))).join("")}</div>
 <script>
 (function(){
@@ -587,7 +644,7 @@ ${view === "testnet" ? feedHtml() : ""}
 ${view === "mainnet" ? splitHtml() : ""}
 ${consensusHtml(nets.map((n) => n.network))}
 ${clientsHtml((clients?.() ?? []).filter((h) => isTestnet(h.network) === (view === "testnet")))}
-<section class="card" style="margin-bottom:12px"><h2>Shard stalls${openInView > 0 ? ` <span class="pill bad">${openInView} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}</h2>
+<section class="card" id="stalls" style="margin-bottom:12px"><h2>Shard stalls${openInView > 0 ? ` <span class="pill bad">${openInView} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}</h2>
 <p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer on the same network kept going. When every reachable node of a network is stalled on a shard the rows are marked network-wide: that network stopped deciding blocks. Diffs on a stalled shard stay pending until it recovers. One line per node and shard with its latest stall; the last column counts the past 7 days; a line with several stalls opens on click.</p>${stallsHtml(stalls)}</section>
 ${
   view === "mainnet"

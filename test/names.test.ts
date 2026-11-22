@@ -44,9 +44,9 @@ test("dashboard: names replace labels on cards and in the split table; reference
   const html = await (await app.request("http://x/")).text();
   const summary = (await (await app.request("http://x/api/summary")).json()) as { nodes: string[]; references: Record<string, string> };
   await store.close();
-  assert.match(html, /<div class="col" data-net="snapchain" data-pin><div class="head ref">snapchain reference<\/div><section class="card">\s*<h2>snapchain <span class="pill bad">no data<\/span><\/h2>/);
-  assert.match(html, /<div class="col" data-net="hypersnap" data-pin><div class="head ref">hypersnap reference<\/div><section class="card">\s*<h2>haatz\.quilibrium\.com <span class="pill bad">no data<\/span><\/h2>/);
-  assert.match(html, /<div class="col" data-net="hypersnap" data-extra><div class="head">hypersnap node<\/div><section class="card">\s*<h2>ohsnap <span class="pill bad">no data<\/span><\/h2>/, "plain node: header says node, title has no reference note");
+  assert.match(html, /<div class="col" id="node-[\w.-]+" data-net="snapchain" data-pin><div class="head ref">snapchain reference<\/div><section class="card">\s*<h2>snapchain <span class="pill bad">no data<\/span><\/h2>/);
+  assert.match(html, /<div class="col" id="node-[\w.-]+" data-net="hypersnap" data-pin><div class="head ref">hypersnap reference<\/div><section class="card">\s*<h2>haatz\.quilibrium\.com <span class="pill bad">no data<\/span><\/h2>/);
+  assert.match(html, /<div class="col" id="node-[\w.-]+" data-net="hypersnap" data-extra><div class="head">hypersnap node<\/div><section class="card">\s*<h2>ohsnap <span class="pill bad">no data<\/span><\/h2>/, "plain node: header says node, title has no reference note");
   assert.doesNotMatch(html, /pill muted">[a-z ]*reference/, "no reference pills in titles");
   assert.match(html, /<td>hypersnap<\/td><td>haatz\.quilibrium\.com, ohsnap<\/td>/, "split table prints names");
   assert.doesNotMatch(html, /<h2>hypersnap /, "the label is not printed as a card title once named");
