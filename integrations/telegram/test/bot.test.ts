@@ -147,3 +147,18 @@ test('feedback: slash form anywhere, prose form only when addressed, capped, fil
   assert.equal(lines[0].text, 'line one\nline two');
   assert.equal(lines[1].text.length, FEEDBACK_MAX);
 });
+
+test('/consensus: one block per network from the lines the API already formats; menu and matcher know the command', async () => {
+  assert.deepEqual(match({ ...base, text: '/consensus' }), { command: 'consensus' });
+  assert.deepEqual(match({ ...base, text: '/consensus@snapdiffbot' }), { command: 'consensus' });
+  assert.deepEqual(match({ ...base, text: '/consensus help' }), { command: 'consensus', help: true });
+  assert.ok(COMMANDS.includes('consensus') && COMMAND_MENU.some(m => m.command === 'consensus'));
+  const calls: string[] = [];
+  const text = await new Snapdiff(sampleFetch(calls)).consensus();
+  assert.deepEqual(calls, ['consensus']);
+  assert.match(text, /^hypersnap:\n  shard 0: 7 of 8 at tip, quorum 6; not monitored: 1\n  shard 1: 5 of 8 at tip, quorum 6; behind: rainonme \(32,288\); down: haatz/);
+  assert.match(text, /hypersnap-testnet:\n  shard 0: 2 of 2 at tip, quorum 2/);
+  assert.match(text, /https:\/\/snapdiff\.schmidtiest\.xyz$/);
+  const down = new Snapdiff((async () => { throw new Error('refused'); }) as unknown as typeof fetch);
+  assert.equal(await down.consensus(), 'snapdiff api unavailable\nhttps://snapdiff.schmidtiest.xyz');
+});

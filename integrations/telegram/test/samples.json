@@ -153,5 +153,21 @@
       }
     ],
     "history": []
+  },
+  "consensus": {
+    "at": 0,
+    "source": "info+validators",
+    "tolerance": 30,
+    "networks": {},
+    "lines": {
+      "hypersnap": [
+        "shard 0: 7 of 8 at tip, quorum 6; not monitored: 1",
+        "shard 1: 5 of 8 at tip, quorum 6; behind: rainonme (32,288); down: haatz; not monitored: 1",
+        "shard 2: 7 of 8 at tip, quorum 6; not monitored: 1"
+      ],
+      "hypersnap-testnet": [
+        "shard 0: 2 of 2 at tip, quorum 2"
+      ]
+    }
   }
 }

@@ -99,6 +99,17 @@ export class Snapdiff {
       return [...lines, DASHBOARD].join('\n');
     } catch { return UNAVAILABLE; }
   }
+  /** /consensus: snapdiff's per-shard lines (src/consensus.ts there), one block per network. */
+  async consensus(): Promise<string> {
+    try {
+      const c = await this.get<{ lines: Record<string, string[]> }>('/consensus');
+      if (!c.lines || typeof c.lines !== 'object') throw Error('invalid consensus');
+      const blocks = Object.entries(c.lines).filter(([, v]) => Array.isArray(v) && v.length > 0).slice(0, 4)
+        .map(([network, lines]) => [`${safe(network)}:`, ...lines.slice(0, 6).map(l => `  ${safe(l)}`)].join('\n'));
+      if (blocks.length === 0) return `no network has a validators file configured\n${DASHBOARD}`;
+      return [...blocks, 'can vote = at the tip now; quorum = signatures a block needs', DASHBOARD].join('\n');
+    } catch { return UNAVAILABLE; }
+  }
   /** /status: every node and every watched client, no diff counts. */
   async status(): Promise<string> {
     try {

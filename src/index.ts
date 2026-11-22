@@ -122,7 +122,7 @@ if (mesh) {
   stops.push(every(cfg.meshIntervalMs, "peers", () => mesh.runAll(), log));
 }
 
-const server = serve({ fetch: buildApp(cfg, store, monitor ? () => monitor.snapshot() : undefined, releases ? () => releases.snapshot() : undefined, feed ? () => feed.snapshot() : undefined, mesh ? () => mesh.snapshot() : undefined).fetch, port: cfg.port, hostname: "0.0.0.0" });
+const server = serve({ fetch: buildApp(cfg, store, monitor ? () => monitor.snapshot() : undefined, releases ? () => releases.snapshot() : undefined, feed ? () => feed.snapshot() : undefined, mesh ? () => mesh.snapshot() : undefined, validatorSets ? (network: string) => validatorSets.sets(network) : undefined).fetch, port: cfg.port, hostname: "0.0.0.0" });
 log(`dashboard: http://localhost:${cfg.port}`);
 
 const shutdown = async () => {

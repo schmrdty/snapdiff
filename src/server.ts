@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { embedJson, manifestJson } from "./miniapp.js";
 import { meshLine, type MeshSummary } from "./mesh.js";
+import { consensusLine, shardConsensus, type ConsensusNode, type ShardConsensus } from "./consensus.js";
+import type { ValidatorSet } from "./validators.js";
 import { CLIENT_STATUSES, type ClientHealth, type ClientStatus } from "./clients.js";
 import { networks, nodeOf, type Config, isTestnetNetwork } from "./config.js";
 import { hostOf } from "./hub.js";
@@ -50,7 +52,7 @@ const CAUSE_HELP: Record<Cause, string> = {
 
 const isCause = (v: string | undefined): v is Cause => v !== undefined && (CAUSES as readonly string[]).includes(v);
 
-export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth[], releases?: () => Record<string, ReleaseState>, feed?: () => Record<string, FeedSnapshot>, mesh?: () => Record<Side, MeshSummary>): Hono {
+export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth[], releases?: () => Record<string, ReleaseState>, feed?: () => Record<string, FeedSnapshot>, mesh?: () => Record<Side, MeshSummary>, sets?: (network: string) => ReadonlyArray<ValidatorSet> | null): Hono {
   const app = new Hono();
   // Node ids in the database ARE the configured labels; NODE_<LABEL>_NAME only changes how a
   // label is printed on this page (cards, stall and split tables). The API keeps the ids.
@@ -98,6 +100,22 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
   const isTestnet = isTestnetNetwork;
   const allNets = nets;
   const hasTestnet = allNets.some((n) => isTestnet(n.network));
+  // Consensus view (src/consensus.ts): for a network with a validators file, each shard's
+  // validators split into at tip, behind, down and not monitored, against the quorum. Keys
+  // come from the peer ids the peer view already read; heights from the latest info rows.
+  const consensusFor = (network: string, infos: Record<Side, InfoSnapshot | null>): ShardConsensus[] | null => {
+    const vs = sets?.(network);
+    if (!vs) return null;
+    const snap = meshSnap();
+    const labels = allNets.find((n) => n.network === network)?.labels ?? [];
+    const nodes: ConsensusNode[] = labels.map((l) => {
+      const i = infos[l];
+      return { label: l, name: label(l), keyPrefix: snap[l]?.self?.keyPrefix ?? null, reachable: i?.reachable === true, shards: i?.shards.map((x) => ({ shardId: x.shardId, maxHeight: x.maxHeight })) ?? [] };
+    });
+    return shardConsensus(nodes, vs);
+  };
+  const consensusAll = (infos: Record<Side, InfoSnapshot | null>): Record<string, ShardConsensus[]> =>
+    Object.fromEntries(allNets.map((n) => [n.network, consensusFor(n.network, infos)] as const).filter((e): e is readonly [string, ShardConsensus[]] => e[1] !== null));
   const networkMap = Object.fromEntries(nets.map((x) => [x.network, x.labels]));
   const latestInfos = async (): Promise<Record<Side, InfoSnapshot | null>> =>
     Object.fromEntries(await Promise.all(nodeLabels.map(async (l) => [l, await store.latestInfo(l)] as const)));
@@ -128,6 +146,13 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
   app.get("/api/mesh", (c) => {
     const snap = meshSnap();
     return c.json({ source: "currentPeers", mesh: snap, names: Object.fromEntries(peerNames(snap)), networks: cfg.meshNetworks, validatorSets: Object.keys(cfg.validatorSetUrls) });
+  });
+
+  // Per network and shard: validators of the current set at the tip (able to vote), behind,
+  // down, or not monitored, with the quorum. README "Consensus view" explains the limits.
+  app.get("/api/consensus", async (c) => {
+    const infos = await latestInfos();
+    return c.json({ at: Date.now(), source: "info+validators", tolerance: 30, networks: consensusAll(infos), lines: Object.fromEntries(Object.entries(consensusAll(infos)).map(([n, rows]) => [n, rows.map(consensusLine)])) });
   });
 
   app.get("/api/stalls", async (c) => {
@@ -350,6 +375,20 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     // Client cards render only from fixed vocabularies: the status word comes
     // from CLIENT_STATUSES, the link from the operator's config, and every
     // string passes through esc(). Nothing from a health response is a link.
+    // Consensus card: one row per shard of each network in view that has a validators file.
+    // Red when fewer validators can vote than a block needs, amber at exactly the quorum.
+    const CONS_CLASS: Record<ShardConsensus["state"], string> = { ok: "ok", edge: "warn", short: "bad", unknown: "muted" };
+    const consensusHtml = (networksInView: string[]): string => {
+      const all = consensusAll(infos);
+      const rows = networksInView.flatMap((n) => (all[n] ?? []).map((r) => [n, r] as const));
+      if (rows.length === 0) return "";
+      return `<section class="card" style="margin-bottom:12px"><h2>Consensus</h2>
+<p class="muted">Per shard: validators of the set in force whose node is at the tip and can vote, against the signatures a block needs (more than two thirds of the set). Read from each node's own heights and the published validators file. Block signers are not on the HTTP API, so "can vote" is the nearest measurable thing to "signing"; a validator snapdiff does not monitor is counted as unknown, never as a vote.</p>
+<div class="scroll"><table><thead><tr><th>Network</th><th>Shard</th><th>Can vote</th><th>Quorum</th><th>Behind</th><th>Down</th><th>Not monitored</th></tr></thead><tbody>
+${rows
+  .map(([n, r]) => `<tr><td>${esc(n)}</td><td>${r.shardId}</td><td><span class="pill ${CONS_CLASS[r.state]}">${r.state === "unknown" ? "set not loaded" : `${r.atTip.length} of ${r.setSize}`}</span>${r.atTip.length > 0 ? ` <span class="muted">${esc(r.atTip.join(", "))}</span>` : ""}</td><td>${r.state === "unknown" ? "" : r.quorum}</td><td>${esc(r.behind.map((b) => `${b.name} (${b.lag.toLocaleString("en-US")})`).join(", "))}</td><td>${esc(r.down.join(", "))}</td><td>${r.unmonitored.length > 0 ? `${r.unmonitored.length} <span class="muted">${esc(r.unmonitored.join(", "))}</span>` : ""}</td></tr>`)
+  .join("")}</tbody></table></div></section>`;
+    };
     const STATUS_CLASS: Record<ClientStatus, string> = { ok: "ok", degraded: "warn", down: "bad", unknown: "muted" };
     const clientsHtml = (list: ClientHealth[]) =>
       list.length === 0
@@ -535,6 +574,7 @@ ${extraLabels.length > 0 ? `<div class="pager" id="pager" hidden><span class="mu
 </script>
 ${view === "testnet" ? feedHtml() : ""}
 ${view === "mainnet" ? splitHtml() : ""}
+${consensusHtml(nets.map((n) => n.network))}
 ${clientsHtml((clients?.() ?? []).filter((h) => isTestnet(h.network) === (view === "testnet")))}
 <section class="card" style="margin-bottom:12px"><h2>Shard stalls${openInView > 0 ? ` <span class="pill bad">${openInView} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}</h2>
 <p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer on the same network kept going. When every reachable node of a network is stalled on a shard the rows are marked network-wide: that network stopped deciding blocks. Diffs on a stalled shard stay pending until it recovers. One line per node and shard with its latest stall; the last column counts the past 7 days; a line with several stalls opens on click.</p>${stallsHtml(stalls)}</section>

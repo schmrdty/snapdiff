@@ -20,9 +20,10 @@ const subs = new SubStore(subsFile);
 // Per-user reply spacing. 20 s read as the bot ignoring people in a busy group; 12 s still blocks a flood (Ryan, 2026-11-13).
 const LIMIT_MS = 12_000;
 const HELP: Record<string, string> = {
-  help: 'commands: /snapdiff network summary, /status every node and client, /fid 123 open diffs for one FID, /node LABEL one node over 24 h, /subscribe LABEL node events by DM, /unsubscribe, /feedback your note, /tip. Add "is <node or client> down" to /snapdiff to check one. Reply "stop" to mute me for you.',
+  help: 'commands: /snapdiff network summary, /status every node and client, /consensus validators able to vote per shard, /fid 123 open diffs for one FID, /node LABEL one node over 24 h, /subscribe LABEL node events by DM, /unsubscribe, /feedback your note, /tip. Add "is <node or client> down" to /snapdiff to check one. Reply "stop" to mute me for you.',
   snapdiff: 'usage: /snapdiff. Networks up, worst block delay, open diff counts. Add "is <node or client> down" to check one node or client.',
   status: 'usage: /status. Every node (up or down, block delay, which provider answered) and every watched client.',
+  consensus: 'usage: /consensus. For each network with a validators file, per shard: how many validators of the current set are at the tip and can vote, the quorum a block needs, and who is behind, down, or not monitored. Block signers are not on the HTTP API, so this is the nearest measurable thing to signing.',
   fid: 'usage: /fid 123, digits only. Lists open diffs for that FID: which nodes have each cast and which are missing it.',
   node: 'usage: /node LABEL, the label as /status prints it. That node now, its last 24 h (checks, uptime, worst delay, stalls), shard heights, and its newest stall.',
   subscribe: `usage: /subscribe LABEL, in a private chat with me. I message you when that node goes down, comes back, a shard stalls or recovers, or its version falls behind the newest on its network (checked once a minute, one message per event type per 10 min). Up to ${MAX_LABELS_PER_CHAT} nodes per chat. /subscribe alone lists yours.`,
@@ -78,6 +79,7 @@ bot.on('message:text', async ctx => {
   }
   else if (t.command === 'tip') body = tipText;
   else if (t.command === 'status') body = await service.status();
+  else if (t.command === 'consensus') body = await service.consensus();
   else if (t.command === 'fid') body = await service.fid(t.fid!);
   else if (t.command === 'node') body = await service.node(t.node!);
   else if (t.command === 'subscribe' || t.command === 'unsubscribe') body = await subscribeReply(t.command, m.chat.id, direct, t.node);

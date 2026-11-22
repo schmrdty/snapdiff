@@ -127,6 +127,7 @@ A one-sided fetch failure never creates a diff. The FID is skipped for that scan
 | `GET /api/summary` | `nodes` (labels, in order), `networks` (network to labels), `reference`, counts by cause, by missing node (`summary.byMissingNode`), by scope (`summary.byScope`), per-network disagreements (`summary.networkSplit`), latest `/v1/info` per node (`info[label]`, including `version`), `versions` (per network, the newest version its reachable nodes report), `releases` (per network, the newest version the project has published: `version`, `publishedAt`, `checkedAt`, `error`; `{}` when the feed is off) |
 | `GET /api/diffs?cause=unexplained&limit=200` | Diff rows with the full message JSON, shard, `presentNodes`, and `scope` |
 | `GET /api/stalls?limit=200` | Shard stall events, newest first |
+| `GET /api/consensus` | Per network with a validators file, per shard: `setSize`, `quorum` (more than two thirds), `tip`, `effectiveAt`, `atTip` (validators whose node is reachable and within `tolerance` blocks of the tip), `behind` (name and lag), `down`, `unmonitored` (key prefixes behind no monitored node), `state` (`ok`, `edge` at exactly the quorum, `short`, `unknown`); `lines` holds the same as one sentence per shard, the text the Telegram `/consensus` command prints |
 | `GET /api/mesh` | Peer view per node on the networks `MESH_NETWORKS` enables: `source` (`currentPeers`), `mesh` (label to summary: `state`, `fallback`, `setKnown`, `self` with role and `joinsAt`, `peers` counts with `setSize`, `validators` rows, `missing` key prefixes), `names` (peer id to node name), `networks`, `validatorSets` (networks with a file configured) |
 | `GET /api/node/LABEL?hours=24&limit=60` | One node by label: `name`, `network`, `reference` and `validator` flags, `version` (`current`, `latest` on its network, `behind`), `release` (newest published on its network, or null), `latest` snapshot, `window` (samples, up, down, `uptimePct`, `worstDelay`, stall count over 1 to 168 hours), its `stalls` in the window, and `history` (newest samples, up to 1500). 404 for an unknown label. Operators use it to follow their own node; the Telegram bot's `/node LABEL` reads it |
 | `GET /llms.txt` | Plain-text description of this deployment for agents and crawlers (llms.txt layout): node list from the running config, the endpoints above with absolute links, how to read scope and cause, and doc links |
@@ -156,6 +157,21 @@ See `.env.example`. Every value has a default. Sizing the net: with the defaults
 ## Published releases
 
 Each node card compares the node to two bars. `behind X` (red) means a reachable node on the same network already runs X. `X published` (amber) means the project has pushed X to its image registry and no node on the network runs it yet, so this is the earlier of the two. The feed is the Docker Hub tag list of each network's image (`src/releases.ts`), fetched from the server every `RELEASE_INTERVAL_MIN` minutes; the only thing read from a response is a numeric tag and its push time. `RELEASE_FEED_<NETWORK>` overrides the URL or turns a network off (`off`). Hypersnap has no GitHub releases for its 0.17.x line, so the registry is the release list.
+
+## Consensus view
+
+The Consensus card (and `/api/consensus`, and the bot's `/consensus`) answers "how many of the
+validators can vote right now" per shard. For each network with a validators file it takes the
+set in force for the shard at the current tip, finds each validator's node among the monitored
+nodes by the key its peer id encodes, and sorts them: at tip (reachable, within 30 blocks of the
+highest height any monitored node reports), behind (with the lag), down, or not monitored. The
+quorum is more than two thirds of the set. Red below it, amber at exactly it.
+
+What it is not: a count of signatures. The HTTP API has no block or chunk route, so block
+signers are only on the gRPC port every operator keeps private. "At tip" is the nearest
+measurable thing to "signing", and a validator snapdiff does not monitor is counted as unknown,
+never as a vote. When upstream exposes commits over HTTP, `src/consensus.ts` is where the
+signed count replaces this one.
 
 ## Peer view (optional, testnet first)
 
