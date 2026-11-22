@@ -11,7 +11,9 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 //     A stall on every node of the network is worded as the network's pause, without the
 //     label, so a chat following two nodes of one network reads it once.
 // The file holds chat ids and labels, nothing else (no names, no text).
-export const MAX_LABELS_PER_CHAT = 3;
+// 7 since 2026-11-22 (Ryan): three was too few to follow one operator's nodes plus the
+// reference nodes; the per-poll send cap and the quiet period still bound the volume.
+export const MAX_LABELS_PER_CHAT = 7;
 export const MAX_CHATS = 25;
 export const POLL_MS = 60_000;
 export const QUIET_MS = 10 * 60_000;

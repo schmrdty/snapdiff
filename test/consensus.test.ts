@@ -89,3 +89,35 @@ test("page and /api/consensus: card renders for a network with a validators file
   assert.match(html, /hub-b \(600\)/);
   assert.equal((html.match(/<script>/g) ?? []).length, 1, "no new inline script (CSP hash)");
 });
+
+test("a validator that goes down stays tied to its key: it reads down, not unmonitored", async () => {
+  const { loadConfig } = await import("../src/config.js");
+  const { buildApp } = await import("../src/server.js");
+  const { SqliteStore } = await import("../src/store/sqlite.js");
+  // Real peer id and key pairs (the key is the last 32 bytes of the decoded id).
+  const A = { id: "12D3KooWRiEqbykRZgkZiWYXmf8iiGi4aMFeovgRg88EgtFGoydh", key: "ec2937c83922ff75785ab2d552f177f83fc72cf6aaf8aee7e330e6d4c338bd50" };
+  const B = { id: "12D3KooW9uPjmgKNasKiu6j8D4h5pRCLNwLDJxovaAccnz3iRFvS", key: "0149adb8c10672b17a86fb0b9247433d12b7e22c1b888499d3be5cde5171c463" };
+  const mk = (label: string) => ({ label, url: `https://${label}.test`, network: "hypersnap", headers: {}, providers: [], validator: true });
+  const cfg = { ...loadConfig(), nodes: [mk("hub-a"), mk("hub-b")], reference: "hub-a", references: { hypersnap: "hub-a" } };
+  const store = new SqliteStore(":memory:");
+  const info = (side: string, reachable: boolean) => ({ side, at: Date.now(), reachable, provider: side, note: null, maxBlockDelay: reachable ? 1 : null, numShards: 2, numFidRegistrations: 1, shards: reachable ? [{ shardId: 1, maxHeight: 500, blockDelay: 1 }] : [], error: reachable ? null : "timeout", version: "0.17.20" });
+  const open = (p: { id: string; key: string }) => ({ side: "x", at: 0, state: "open", error: null, fallback: false, setKnown: true, self: { peerId: p.id, keyPrefix: p.key.slice(0, 8), validator: true, joinsAt: null }, peers: { total: 0, validators: 0, setSize: 2 }, validators: [], missing: [] });
+  const gone = { side: "x", at: 0, state: "unreachable", error: "timeout", fallback: false, setKnown: false, self: null, peers: { total: 0, validators: 0, setSize: 0 }, validators: [], missing: [] };
+  let bDown = false;
+  const mesh = () => ({ "hub-a": open(A), "hub-b": bDown ? gone : open(B) }) as never;
+  const sets = () => [{ effectiveAt: 0, shardIds: [1], keys: [A.key, B.key] }];
+  const app = buildApp(cfg, store, undefined, undefined, undefined, mesh, sets);
+  await store.recordInfo(info("hub-a", true));
+  await store.recordInfo(info("hub-b", true));
+  const first = (await (await app.request("http://x/api/consensus")).json()) as { networks: Record<string, { atTip: string[]; down: string[]; unmonitored: string[] }[]> };
+  assert.deepEqual(first.networks["hypersnap"]![0]!.atTip, ["hub-a", "hub-b"]);
+  bDown = true;
+  await store.recordInfo(info("hub-b", false));
+  const second = (await (await app.request("http://x/api/consensus")).json()) as { networks: Record<string, { atTip: string[]; down: string[]; unmonitored: string[]; state: string }[]>; lines: Record<string, string[]> };
+  await store.close();
+  const row = second.networks["hypersnap"]![0]!;
+  assert.deepEqual(row.atTip, ["hub-a"]);
+  assert.deepEqual(row.down, ["hub-b"], "the node that stopped answering is named");
+  assert.deepEqual(row.unmonitored, [], "and is not mistaken for a validator nobody watches");
+  assert.equal(second.lines["hypersnap"]![0], "shard 1: 1 of 2 at tip, quorum 2; down: hub-b");
+});

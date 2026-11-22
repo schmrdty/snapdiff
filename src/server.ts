@@ -3,7 +3,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { embedJson, manifestJson } from "./miniapp.js";
 import { meshLine, type MeshSummary } from "./mesh.js";
 import { consensusLine, shardConsensus, type ConsensusNode, type ShardConsensus } from "./consensus.js";
-import type { ValidatorSet } from "./validators.js";
+import { keyFromPeerId, type ValidatorSet } from "./validators.js";
 import { CLIENT_STATUSES, type ClientHealth, type ClientStatus } from "./clients.js";
 import { networks, nodeOf, type Config, isTestnetNetwork } from "./config.js";
 import { hostOf } from "./hub.js";
@@ -107,10 +107,21 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     const vs = sets?.(network);
     if (!vs) return null;
     const snap = meshSnap();
+    // A node that stops answering loses its peer view, and with it the key that ties it to
+    // the set; it then read "not monitored" instead of "down" (seen 2026-11-22 with two
+    // validators mid-upgrade). The peer id a node last reported is remembered for the life
+    // of this process (knownPeerIds, refreshed by peerNames), so its key is derived from
+    // that first. After a snapdiff restart a node that has been down the whole time is
+    // still unknown, and says so.
+    peerNames(snap);
+    const keyOf = (l: Side): string | null => {
+      const id = knownPeerIds.get(l);
+      return (id !== undefined ? keyFromPeerId(id)?.slice(0, 8) : undefined) ?? meshOf(snap, l)?.self?.keyPrefix ?? null;
+    };
     const labels = allNets.find((n) => n.network === network)?.labels ?? [];
     const nodes: ConsensusNode[] = labels.map((l) => {
       const i = infos[l];
-      return { label: l, name: label(l), keyPrefix: snap[l]?.self?.keyPrefix ?? null, reachable: i?.reachable === true, shards: i?.shards.map((x) => ({ shardId: x.shardId, maxHeight: x.maxHeight })) ?? [] };
+      return { label: l, name: label(l), keyPrefix: keyOf(l), reachable: i?.reachable === true, shards: i?.shards.map((x) => ({ shardId: x.shardId, maxHeight: x.maxHeight })) ?? [] };
     });
     return shardConsensus(nodes, vs);
   };
