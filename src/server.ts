@@ -492,7 +492,7 @@ ${list
           const rows = f.casts
             .map(
               (x) =>
-                `<tr><td>${ago(x.at, now)}</td><td>${x.fid}</td><td class="text">${esc(x.text)}${x.replyTo ? ` <span class="muted">reply to ${esc(x.replyTo)}</span>` : ""}${x.embeds > 0 ? ` <span class="muted">${x.embeds} embed${x.embeds === 1 ? "" : "s"}</span>` : ""}</td><td class="mono">${esc(x.hash.slice(0, 12))}…</td></tr>`,
+                `<tr><td>${ago(x.at, now)}</td><td>${x.fid}</td><td class="text${x.text.includes("\n") ? " pre" : ""}">${esc(x.text)}${x.replyTo ? ` <span class="muted">reply to ${esc(x.replyTo)}</span>` : ""}${x.embeds > 0 ? ` <span class="muted">${x.embeds} embed${x.embeds === 1 ? "" : "s"}</span>` : ""}</td><td class="mono">${esc(x.hash.slice(0, 12))}…</td></tr>`,
             )
             .join("");
           return `<section class="card" style="margin-bottom:12px"><h2>Casts on ${esc(network)}</h2>
@@ -582,6 +582,8 @@ th{font-weight:600;color:var(--muted)}.mono{font-family:ui-monospace,monospace}.
 .stalls summary{cursor:pointer;list-style:none}.stalls summary::-webkit-details-marker{display:none}.stalls summary>span:first-child::before{content:"\\25B8";position:absolute;left:0;color:var(--muted)}.stalls details[open]>summary>span:first-child::before{content:"\\25BE"}
 .stalls details>table{width:auto;margin:4px 8px 10px 2.2em}.stalls details>table td,.stalls details>table th{border-bottom:1px solid var(--line)}
 td.text{white-space:normal;min-width:240px;max-width:460px}
+/* A cast with line breaks keeps them and is set in a fixed-width font: people post small ASCII pieces on the testnet, and collapsed into one line they are noise. */
+td.text.pre{white-space:pre;font:12px/1.15 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;max-width:none}
 .nodes{grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-top:8px}[hidden]{display:none!important}
 .col .head{font-size:12px;text-transform:uppercase;letter-spacing:.05em;padding:3px 12px;border:1px solid var(--line);border-bottom:0;border-radius:10px 10px 0 0;background:var(--line);color:var(--muted)}
 .col{display:flex;flex-direction:column}.card .host{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;margin-bottom:2px}.col .head.ref{font-weight:700;color:var(--fg)}.col .card{border-radius:0 0 10px 10px;flex:1}

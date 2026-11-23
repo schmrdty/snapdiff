@@ -88,3 +88,21 @@ test("page and API: the casts card sits under the testnet nodes only; /api/testn
   assert.deepEqual(api.feeds, feedSnap);
   assert.deepEqual(off.feeds, {}, "no feed: an empty object, never an error");
 });
+
+test("a cast with line breaks keeps them in a fixed-width cell; a one-line cast is rendered as before", async () => {
+  const node = (label: string, network: string) => ({ label, url: `https://${label}.test`, network, headers: {}, providers: [] });
+  const cfg = { ...loadConfig(), nodes: [node("snapchain", "snapchain"), node("testnet-0", "hypersnap-testnet")], reference: "snapchain", references: { snapchain: "snapchain", "hypersnap-testnet": "testnet-0" } };
+  const store = new SqliteStore(":memory:");
+  const piece = " Oo oO     Oo oO\no@O <b> O@o\ntestnet 530977 3n 4l 4d104e4d";
+  const rows = castsFromMessages("hypersnap-testnet", [
+    cast(4294967297, 185_000_000, piece, `0x${"ab".repeat(20)}`),
+    cast(4294967297, 185_000_001, "one line", `0x${"cd".repeat(20)}`),
+  ]);
+  assert.equal(rows.find((r) => r.hash.startsWith("0xab"))!.text, piece, "the feed keeps the line breaks and leading spaces");
+  const feedSnap = { "hypersnap-testnet": { network: "hypersnap-testnet", source: "testnet-0", fids: 1, checkedAt: Date.now(), error: null, casts: rows } };
+  const html = await (await buildApp(cfg, store, undefined, undefined, () => feedSnap).request("http://x/?net=testnet")).text();
+  await store.close();
+  assert.ok(html.includes(`<td class="text pre"> Oo oO     Oo oO\no@O &lt;b&gt; O@o\ntestnet 530977 3n 4l 4d104e4d`), "multi-line text: pre cell, escaped, breaks intact");
+  assert.ok(html.includes(`<td class="text">one line`), "single-line text: the ordinary cell");
+  assert.match(html, /td\.text\.pre\{white-space:pre;font:12px\/1\.15 ui-monospace/);
+});
