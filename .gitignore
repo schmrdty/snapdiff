@@ -3,3 +3,7 @@ dist
 data
 reports
 .env
+
+# Claude project kit for operating snapdiff: local only, never published (operator notes and
+# addresses of private nodes). Untracked 2026-11-24.
+integrations/clawed/
