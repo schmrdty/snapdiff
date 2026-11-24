@@ -106,7 +106,8 @@ test("node index: every node of the view is listed once and links to a card that
   await store.close();
   const index = html.slice(html.indexOf('id="index"'), html.indexOf('id="nodes"'));
   const links = [...index.matchAll(/<a class="irow" href="#node-([^"]+)"/g)].map((m) => decodeURIComponent(m[1]!));
-  assert.deepEqual(links, ["snapchain", "hypersnap", "val.two", "reader"], "reference, then validators, then read nodes; testnet nodes stay on their tab");
+  // Snapchain sorts below Hypersnap (Ryan, 2026-11-24); within a network: reference, validators, read nodes.
+  assert.deepEqual(links, ["hypersnap", "val.two", "reader", "snapchain"], "hypersnap group first, snapchain below it; testnet nodes stay on their tab");
   for (const l of links) assert.ok(html.includes(`<div class="col" id="node-${l}"`), `card for ${l} is on the page`);
   assert.match(index, /hypersnap <span class="muted">2 validators, 1 read node<\/span>/);
   assert.match(index, /<span class="iname">second<\/span>/, "the display name, not the label");

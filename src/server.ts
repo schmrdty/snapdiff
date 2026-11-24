@@ -52,6 +52,31 @@ const CAUSE_HELP: Record<Cause, string> = {
 
 const isCause = (v: string | undefined): v is Cause => v !== undefined && (CAUSES as readonly string[]).includes(v);
 
+// Collapsible sections (static/fold.js). Every section is one card whose heading line carries an
+// arrow at its right edge; folded, the card is that one line and the cards below move up. The
+// Nodes card also folds each network group inside it. Ryan approved the testnet mockup for both
+// tabs on 2026-11-24. The markup works without the script: every section renders open and the
+// arrows stay hidden (`.fold-js` is set by the script), so a blocked script costs nothing. The
+// script is a file under /static, which the Caddy CSP already allows ('self'); the hash-pinned
+// inline pager script below is untouched.
+const CHEV = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 10.5 8 6l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const foldBtn = (id: string, name: string): string =>
+  `<button class="fold" type="button" aria-expanded="true" aria-controls="${esc(id)}-body" aria-label="Collapse ${esc(name)}">${CHEV}</button>`;
+/** One collapsible card. `h2Inner` is HTML the caller already escaped (it may carry pills). */
+const sec = (id: string, name: string, h2Inner: string, body: string, headExtra = ""): string =>
+  `<section class="card sec fold-box" id="${esc(id)}" data-name="${esc(name)}"><div class="sec-head"><h2>${h2Inner}</h2>${headExtra}${foldBtn(id, name)}</div><div class="sec-body" id="${esc(id)}-body"><div class="sec-in"><div class="sec-pad">
+${body}</div></div></div></section>`;
+
+/**
+ * Overall state of one network's nodes for its letter badge in the Nodes card (Ryan,
+ * 2026-11-24): green while fewer than 41% of its nodes are down, yellow at 41% or more, red
+ * only when none of them answers. A node with no snapshot yet counts as not answering.
+ */
+export const networkState = (total: number, down: number): "ok" | "warn" | "bad" =>
+  total > 0 && down >= total ? "bad" : total > 0 && down / total >= 0.41 ? "warn" : "ok";
+/** H for Hypersnap networks (testnet included), S for Snapchain. */
+const netLetter = (network: string): string => (network.includes("snapchain") ? "S" : "H");
+
 export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth[], releases?: () => Record<string, ReleaseState>, feed?: () => Record<string, FeedSnapshot>, mesh?: () => Record<Side, MeshSummary>, sets?: (network: string) => ReadonlyArray<ValidatorSet> | null): Hono {
   const app = new Hono();
   // Node ids in the database ARE the configured labels; NODE_<LABEL>_NAME only changes how a
@@ -368,19 +393,31 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
                 .join("");
       return `<a class="irow" href="#node-${esc(encodeURIComponent(side))}"><span class="iname">${esc(label(side))}</span><span class="pill ${i?.reachable ? "ok" : "bad"}">${i === null ? "no data" : i.reachable ? "up" : "down"}</span><span class="iver${ver.behind ? " bad" : ""}"${ver.behind ? ` title="behind ${esc(ver.latest ?? "")}"` : ""}>${ver.current ? `v${esc(ver.current)}` : ""}</span><span class="irole">${role}</span><span class="ish">${shardCells}</span></a>`;
     };
+    // Each network is a group that folds on its own to one line: the letter badge (H or S,
+    // colored by networkState) and the network name. Snapchain sorts below every other network
+    // (Ryan, 2026-11-24); the rest keep config order.
+    const indexNets = [...nets].sort((a, b) => Number(a.network.includes("snapchain")) - Number(b.network.includes("snapchain")));
     const indexHtml = (): string =>
-      `<section class="card idx" id="index"><h2>Nodes</h2>
-<p class="muted">Tap a node to view its card.</p>
-${nets
+      sec(
+        "index",
+        "Nodes",
+        "Nodes",
+        `<p class="muted">Tap a node to view its card.</p>
+${indexNets
   .map(({ network, labels }) => {
     const refs = labels.filter((l) => Object.values(cfg.references).includes(l));
     const vals = labels.filter((l) => !refs.includes(l) && nodeOf(cfg, l)?.validator);
     const readers = labels.filter((l) => !refs.includes(l) && !nodeOf(cfg, l)?.validator);
     const nVal = labels.filter((l) => nodeOf(cfg, l)?.validator).length;
-    return `<h3>${esc(network)} <span class="muted">${nVal} validator${nVal === 1 ? "" : "s"}, ${labels.length - nVal} read node${labels.length - nVal === 1 ? "" : "s"}</span></h3>
-<div class="irows">${[...refs, ...vals, ...readers].map(indexRow).join("")}</div>`;
+    const down = labels.filter((l) => infos[l]?.reachable !== true).length;
+    const state = networkState(labels.length, down);
+    const stateText = `${network}: ${labels.length - down} of ${labels.length} node${labels.length === 1 ? "" : "s"} answering. Green while under 41% are down, yellow at 41% or more, red when none answer.`;
+    const gid = `grp-${network}`;
+    return `<div class="grp fold-box" id="${esc(gid)}" data-name="${esc(network)}"><div class="grp-head"><span class="nb ${state}" role="img" aria-label="${esc(stateText)}" title="${esc(stateText)}">${netLetter(network)}</span><h3>${esc(network)} <span class="muted">${nVal} validator${nVal === 1 ? "" : "s"}, ${labels.length - nVal} read node${labels.length - nVal === 1 ? "" : "s"}</span></h3>${foldBtn(gid, network)}</div><div class="sec-body" id="${esc(gid)}-body"><div class="sec-in">
+<div class="irows">${[...refs, ...vals, ...readers].map(indexRow).join("")}</div></div></div></div>`;
   })
-  .join("")}</section>`;
+  .join("")}`,
+      );
 
     // Since 2026-11-22 every card renders and nothing is paged. The data-pin and data-extra
     // attributes and the inline pager script below are kept unchanged on purpose: the script's
@@ -393,12 +430,25 @@ ${nets
     const extraLabels = nodeLabels.filter((l) => !pinnedLabels.includes(l));
     const extraSet = new Set(extraLabels);
 
-    const counts = (["unexplained", "pending", "relay_filtered", "version_rule", "sync_lag"] as const)
-      .map(
-        (k) => `<div class="stat ${k}"><div class="n">${summary.byCause[k]}</div><div class="k">${k.replace("_", " ")}</div>
-        <div class="help">${CAUSE_HELP[k]}</div></div>`,
-      )
-      .join("");
+    // Diffs by cause: five number tiles whose explanation shows on hover or focus only (Ryan,
+    // 2026-11-24: the always-visible help text made the row tall), and a bar per cause as the
+    // alternative view, switched by the Chart / Numbers button (static/fold.js remembers it).
+    // Bars share one scale from zero; the colors repeat the tiles' (red unexplained, amber
+    // pending, muted for the expected causes) and every bar carries its name and number, so
+    // color is never the only label.
+    const CAUSE_ORDER = ["unexplained", "pending", "relay_filtered", "version_rule", "sync_lag"] as const;
+    const counts = CAUSE_ORDER.map(
+      (k) => `<div class="stat ${k}" tabindex="0"><div class="n">${summary.byCause[k]}</div><div class="k">${k.replace("_", " ")}</div>
+        <div class="help" role="tooltip">${CAUSE_HELP[k]}</div></div>`,
+    ).join("");
+    const causeMax = Math.max(1, ...CAUSE_ORDER.map((k) => summary.byCause[k]));
+    const causeChart = `<div class="cchart" role="img" aria-label="${esc(`Diffs by cause: ${CAUSE_ORDER.map((k) => `${k.replace("_", " ")} ${summary.byCause[k]}`).join(", ")}`)}">${CAUSE_ORDER.map((k) => {
+      const v = summary.byCause[k];
+      const pct = v === 0 ? 0 : Math.max(0.4, (v / causeMax) * 100);
+      return `<div class="crow" title="${esc(`${k.replace("_", " ")}: ${v}. ${CAUSE_HELP[k]}`)}"><span class="ck">${k.replace("_", " ")}</span><span class="ctrack"><i class="cbar ${k}" style="width:${pct.toFixed(1)}%"></i></span><span class="cn">${v}</span></div>`;
+    }).join("")}</div>`;
+    const causesHtml = () =>
+      sec("causes", "Diffs by cause", "Diffs by cause", `<div class="stats">${counts}</div>${causeChart}`, `<button class="vt" type="button" aria-pressed="false">Chart</button>`);
 
     // Cast text comes out of the stored message JSON; anything unparseable or
     // non-cast shows as empty rather than breaking the page.
@@ -437,19 +487,17 @@ ${nets
       const all = consensusAll(infos);
       const rows = networksInView.flatMap((n) => (all[n] ?? []).map((r) => [n, r] as const));
       if (rows.length === 0) return "";
-      return `<section class="card" id="consensus" style="margin-bottom:12px"><h2>Consensus</h2>
-<p class="muted">Per shard: validators of the set in force whose node is at the tip and can vote, against the signatures a block needs (more than two thirds of the set). Read from each node's own heights and the published validators file. Block signers are not on the HTTP API, so "can vote" is the nearest measurable thing to "signing"; a validator snapdiff does not monitor is counted as unknown, never as a vote.</p>
+      return sec("consensus", "Consensus", "Consensus", `<p class="muted">Per shard: validators of the set in force whose node is at the tip and can vote, against the signatures a block needs (more than two thirds of the set). Read from each node's own heights and the published validators file. Block signers are not on the HTTP API, so "can vote" is the nearest measurable thing to "signing"; a validator snapdiff does not monitor is counted as unknown, never as a vote.</p>
 <div class="scroll"><table><thead><tr><th>Network</th><th>Shard</th><th>Can vote</th><th>Quorum</th><th>Behind</th><th>Down</th><th>Not monitored</th></tr></thead><tbody>
 ${rows
   .map(([n, r]) => `<tr><td>${esc(n)}</td><td>${r.shardId}</td><td><span class="pill ${CONS_CLASS[r.state]}">${r.state === "unknown" ? "set not loaded" : `${r.atTip.length} of ${r.setSize}`}</span>${r.atTip.length > 0 ? ` <span class="muted">${esc(r.atTip.join(", "))}</span>` : ""}</td><td>${r.state === "unknown" ? "" : r.quorum}</td><td>${esc(r.behind.map((b) => `${b.name} (${b.lag.toLocaleString("en-US")})`).join(", "))}</td><td>${esc(r.down.join(", "))}</td><td>${r.unmonitored.length > 0 ? `${r.unmonitored.length} <span class="muted">${esc(r.unmonitored.join(", "))}</span>` : ""}</td></tr>`)
-  .join("")}</tbody></table></div></section>`;
+  .join("")}</tbody></table></div>`);
     };
     const STATUS_CLASS: Record<ClientStatus, string> = { ok: "ok", degraded: "warn", down: "bad", unknown: "muted" };
     const clientsHtml = (list: ClientHealth[]) =>
       list.length === 0
         ? ""
-        : `<section class="card" id="clients" style="margin-bottom:12px"><h2>Clients</h2>
-<p class="muted">Apps people use on each network, checked every ${Math.round(cfg.clientHealthIntervalMs / 1000)} s against the status endpoint each one publishes. Links go to the client's own site.</p>
+        : sec("clients", "Clients", "Clients", `<p class="muted">Apps people use on each network, checked every ${Math.round(cfg.clientHealthIntervalMs / 1000)} s against the status endpoint each one publishes. Links go to the client's own site.</p>
 <div class="scroll"><table><thead><tr><th>Client</th><th>Network</th><th>Status</th><th>Latency</th><th>Checked</th><th>Note</th></tr></thead><tbody>
 ${list
   .map((h) => {
@@ -458,7 +506,7 @@ ${list
 <td>${esc(h.network)}</td><td><span class="pill ${STATUS_CLASS[status]}">${status}</span></td>
 <td>${h.latencyMs === null ? "" : `${h.latencyMs} ms`}</td><td>${ago(h.checkedAt, now)}</td><td>${esc(h.note)}</td></tr>`;
   })
-  .join("")}</tbody></table></div>${cfg.clientHealthCredit ? `<p class="muted" style="margin:8px 0 0">List from <a href="${esc(cfg.clientHealthCredit.url)}" rel="noopener noreferrer" target="_blank">${esc(cfg.clientHealthCredit.text)}</a>.</p>` : ""}</section>`;
+  .join("")}</tbody></table></div>${cfg.clientHealthCredit ? `<p class="muted" style="margin:8px 0 0">List from <a href="${esc(cfg.clientHealthCredit.url)}" rel="noopener noreferrer" target="_blank">${esc(cfg.clientHealthCredit.text)}</a>.</p>` : ""}`);
 
     // A shard stalled on every node of one network is that network stalling, not a node:
     // either every label of the network has an open row, or the detector recorded the rows
@@ -495,21 +543,19 @@ ${list
                 `<tr><td>${ago(x.at, now)}</td><td>${x.fid}</td><td class="text${x.text.includes("\n") ? " pre" : ""}">${esc(x.text)}${x.replyTo ? ` <span class="muted">reply to ${esc(x.replyTo)}</span>` : ""}${x.embeds > 0 ? ` <span class="muted">${x.embeds} embed${x.embeds === 1 ? "" : "s"}</span>` : ""}</td><td class="mono">${esc(x.hash.slice(0, 12))}…</td></tr>`,
             )
             .join("");
-          return `<section class="card" style="margin-bottom:12px"><h2>Casts on ${esc(network)}</h2>
-<p class="muted">Newest ${f.casts.length} across ${f.fids} account${f.fids === 1 ? "" : "s"}, read from ${esc(label(f.source))} ${f.checkedAt === null ? "(not yet)" : ago(f.checkedAt, now)}${f.error ? `; last read failed: ${esc(f.error)}` : ""}. Also at /api/testnet/casts.</p>
-${rows === "" ? `<p class="muted">No casts yet. Register an account and post one with tools/first-cast in the testnet repo.</p>` : `<div class="scroll"><table><thead><tr><th>When</th><th>FID</th><th>Text</th><th>Hash</th></tr></thead><tbody>${rows}</tbody></table></div>`}</section>`;
+          return sec(`casts-${network}`, `Casts on ${network}`, `Casts on ${esc(network)}`, `<p class="muted">Newest ${f.casts.length} across ${f.fids} account${f.fids === 1 ? "" : "s"}, read from ${esc(label(f.source))} ${f.checkedAt === null ? "(not yet)" : ago(f.checkedAt, now)}${f.error ? `; last read failed: ${esc(f.error)}` : ""}. Also at /api/testnet/casts.</p>
+${rows === "" ? `<p class="muted">No casts yet. Register an account and post one with tools/first-cast in the testnet repo.</p>` : `<div class="scroll"><table><thead><tr><th>When</th><th>FID</th><th>Text</th><th>Hash</th></tr></thead><tbody>${rows}</tbody></table></div>`}`);
         })
         .join("");
 
-    const splitHtml = () => `<section class="card" style="margin-bottom:12px"><h2>Network split</h2>
-<p class="muted">A cast missing on every node of a network is a disagreement between the networks (scope "network"). A cast missing on one node while another node on its network has it is that node's problem (scope "node"). Unexplained by scope: node ${summary.byScope.node}, network ${summary.byScope.network}. Judged when each row is first seen, from the nodes that answered.</p>
+    const splitHtml = () => sec("split", "Network split", "Network split", `<p class="muted">A cast missing on every node of a network is a disagreement between the networks (scope "network"). A cast missing on one node while another node on its network has it is that node's problem (scope "node"). Unexplained by scope: node ${summary.byScope.node}, network ${summary.byScope.network}. Judged when each row is first seen, from the nodes that answered.</p>
 <div class="scroll"><table><thead><tr><th>Network</th><th>Nodes</th><th>Casts missing on all its nodes: unexplained</th><th>pending</th></tr></thead><tbody>
 ${nets
   .map(
     ({ network, labels }) =>
       `<tr><td>${esc(network)}</td><td>${labels.map((l) => esc(label(l))).join(", ")}</td><td>${(summary.networkSplit[network]?.unexplained ?? 0) > 0 ? `<span class="pill bad">${summary.networkSplit[network]?.unexplained}</span>` : "0"}</td><td>${summary.networkSplit[network]?.pending ?? 0}</td></tr>`,
   )
-  .join("")}</tbody></table></div></section>`;
+  .join("")}</tbody></table></div>`);
 
     // One line per node and shard, newest first: its latest stall (any age) plus how many and how
     // long in the last 7 days. A pair with more than one stall opens on click to list them all (<details>:
@@ -562,6 +608,7 @@ ${nets
 <meta name="fc:frame" content="${esc(embedJson(cfg, originOf(c), view === "testnet" ? "/?net=testnet" : "/"))}">
 <meta property="og:title" content="${esc(cfg.miniapp.name)}"><meta property="og:description" content="Snapchain and Hypersnap node health"><meta property="og:image" content="${esc(originOf(c))}/static/embed.png">
 <script type="module" src="/static/miniapp.mjs"></script>
+<script src="/static/fold.js"></script>
 <style>
 :root{--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66;--card:#fff;--line:#e3e2dd;--ok:#2f7d4f;--bad:#b3261e;--warn:#9a6700;--fc:#8a63d2;--fc-bg:#f6f2fc;--fc-line:#c9b6ea;--tn:#a855f7;--tn-bg:#f5ecff;--tn-line:#d8b4fe;--link:#1d4ed8}
 @media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--muted:#9c9b95;--card:#1d1d1b;--line:#33322f;--ok:#5cc58a;--bad:#f2867c;--warn:#e0b44c;--fc:#8a63d2;--fc-bg:#231c33;--fc-line:#5d4a85;--tn:#b975ff;--tn-bg:#2a1b47;--tn-line:#7a52c4;--link:#9db9ff}}
@@ -593,14 +640,43 @@ td.text.pre{white-space:pre;font:12px/1.15 ui-monospace,SFMono-Regular,Menlo,Con
 .peers .peer.off{color:var(--bad)}.peers .peer.next{color:var(--warn)}.mesh{margin-bottom:4px}
 .jump{position:sticky;top:0;z-index:5;display:flex;gap:6px;overflow-x:auto;padding:8px 0;margin:8px 0 4px;background:var(--bg);border-bottom:1px solid var(--line)}
 .jump a{flex:none;text-decoration:none;color:var(--fg);border:1px solid var(--line);border-radius:99px;padding:3px 12px;font-size:13px;background:var(--card)}
-[id]{scroll-margin-top:52px}.idx h3{font-size:13px;margin:12px 0 2px;text-transform:uppercase;letter-spacing:.04em}.idx h3 .muted{text-transform:none;letter-spacing:0;font-weight:400}
+[id]{scroll-margin-top:52px}.grp-head h3{font-size:13px;margin:0;flex:1;min-width:0;text-transform:uppercase;letter-spacing:.04em}.grp-head h3 .muted{text-transform:none;letter-spacing:0;font-weight:400}
 .irows{display:grid}.irow,.irow:visited{display:grid;grid-template-columns:minmax(96px,1.3fr) 60px 82px minmax(120px,1fr) minmax(170px,1.5fr);gap:2px 10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--line);text-decoration:none;color:var(--fg);font-size:14px}
 .irow:hover{background:color-mix(in srgb,var(--line) 45%,transparent)}.iname{font-weight:600;color:var(--link);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.irow .pill{justify-self:start}
 .iver,.irole{color:var(--muted);font-size:13px;white-space:nowrap}.iver.bad{color:var(--bad)}.ish{display:flex;gap:6px;justify-content:flex-end;font-variant-numeric:tabular-nums}
 .sh{border:1px solid var(--line);border-radius:6px;padding:0 6px;font-size:13px;white-space:nowrap}.sh i{font-style:normal;color:var(--muted);margin-right:4px;font-size:11px}.sh.bad{border-color:var(--bad)}
 .back{margin:8px 0 0;font-size:13px}
+/* Collapsible cards (static/fold.js). The arrow sits at the right edge of each heading line; a folded
+   card is that line only, and the cards below move up. Nothing overflows a folded card: its body
+   collapses to zero rows inside overflow:hidden. Without the script the arrows stay hidden and
+   every card is open. */
+.sec{margin:0 0 12px;padding:0}.sec-head{display:flex;align-items:center;gap:10px;min-height:44px;padding:4px 6px 4px 14px}
+.sec-head h2{margin:0;flex:1;min-width:0}.sec-pad{padding:0 14px 14px}
+.fold,.vt{display:none}.fold-js .fold{flex:none;width:36px;height:36px;display:grid;place-items:center;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);cursor:pointer;padding:0}
+.fold:hover{border-color:var(--muted)}.fold:focus-visible,.vt:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+.fold svg{width:16px;height:16px;transition:transform .2s ease}.fold-box.shut>div>.fold svg{transform:rotate(180deg)}
+.sec-body{display:grid;grid-template-rows:1fr;transition:grid-template-rows .22s ease,visibility 0s}
+.fold-box.shut>.sec-body{grid-template-rows:0fr;visibility:hidden;transition:grid-template-rows .22s ease,visibility 0s .22s}
+.sec-in{overflow:hidden;min-height:0}
+.sec .grid.nodes{margin:0}.sec .stats{margin:0}
+.grp{border:1px solid var(--line);border-radius:8px;margin:10px 0 0}.grp-head{display:flex;align-items:center;gap:8px;min-height:40px;padding:3px 4px 3px 10px}
+.fold-js .grp .fold{width:30px;height:30px}.grp .irows{padding:0 10px 6px}.grp.shut .grp-head h3 .muted{display:none}
+.nb{flex:none;display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;font:700 13px/1 system-ui,sans-serif}
+.nb.ok{background:var(--ok);color:var(--card)}.nb.warn{background:var(--warn);color:var(--card)}.nb.bad{background:var(--bad);color:var(--card)}
+/* Cause tiles: the explanation is a hover or focus tooltip. The open causes card lets it overflow
+   its body; while the card moves, the body clips again (.moving, set by the script). */
+.stat{position:relative}.stat:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+.stat .help{display:none;position:absolute;left:-1px;right:-1px;top:calc(100% + 4px);z-index:6;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px;box-shadow:0 4px 14px rgb(0 0 0/.2);margin:0;color:var(--fg)}
+.stat:hover .help,.stat:focus .help{display:block}
+#causes:not(.shut):not(.moving)>.sec-body>.sec-in{overflow:visible}
+.fold-js .vt{display:inline-block;flex:none;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:99px;padding:2px 12px;font:inherit;font-size:13px;cursor:pointer}
+.cchart{display:none}.fold-box.chart .stats{display:none}.fold-box.chart .cchart{display:grid;gap:8px}
+.crow{display:grid;grid-template-columns:120px 1fr 56px;gap:10px;align-items:center;font-size:13px}.ck{color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-size:12px}
+.ctrack{height:14px;display:flex;align-items:center}.cbar{display:block;height:10px;border-radius:0 4px 4px 0;background:var(--muted)}.cbar.unexplained{background:var(--bad)}.cbar.pending{background:var(--warn)}
+.cn{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+@media (prefers-reduced-motion:reduce){.sec-body,.fold svg{transition:none!important}}
 @media (max-width:640px){main{padding:12px 10px}h1{font-size:17px}
-.stats{grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:10px 0}.stat{padding:8px 4px;text-align:center}.stat .n{font-size:20px}.stat .k{font-size:9px;letter-spacing:0}.stat .help{display:none}
+.stats{grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:10px 0}.stat{padding:8px 4px;text-align:center}.stat .n{font-size:20px}.stat .k{font-size:9px;letter-spacing:0}.stat{position:static}.stats{position:relative}.crow{grid-template-columns:96px 1fr 44px}
 .irow,.irow:visited{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"name pill ver" "role sh sh";padding:8px 2px}.iname{grid-area:name}.irow .pill{grid-area:pill}.iver{grid-area:ver;text-align:right}.irole{grid-area:role}.ish{grid-area:sh}
 .nodes{grid-template-columns:1fr}}
 .pager{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:16px 0 0}.pager .muted{margin:0}
@@ -616,12 +692,12 @@ ${
 ${
   view === "mainnet"
     ? `<p class="muted">Scans run every ${Math.round(cfg.scanIntervalMs / 60000)} min: ${summary.scans} so far, last ${ago(summary.lastScanAt, now)}, next in about ${nextScanIn(summary.lastScanAt, cfg.scanIntervalMs, now)}. This page reloads every 30 s. Read-only.</p>
-<div class="stats">${counts}</div>`
+${causesHtml()}`
     : `<p class="muted">Node health and shard stalls for the testnet. The cast relay comparison on the Mainnet tab does not apply here. This page reloads every 30 s. Read-only.</p>`
 }
 <nav class="jump" aria-label="Sections"><a href="#index">Nodes</a><a href="#nodes">Cards</a>${consensusHtml(nets.map((n) => n.network)) ? `<a href="#consensus">Consensus</a>` : ""}${(clients?.() ?? []).some((h) => isTestnet(h.network) === (view === "testnet")) ? `<a href="#clients">Clients</a>` : ""}<a href="#stalls">Stalls</a></nav>
 ${indexHtml()}
-<div class="grid nodes" id="nodes">${[...pinnedLabels, ...extraLabels].map((l) => nodeCard(l, infos[l] ?? null, extraSet.has(l))).join("")}</div>
+${sec("nodes", "Cards", "Cards", `<div class="grid nodes">${[...pinnedLabels, ...extraLabels].map((l) => nodeCard(l, infos[l] ?? null, extraSet.has(l))).join("")}</div>`)}
 <script>
 (function(){
   var g=document.getElementById('nodes'),pager=document.getElementById('pager');if(!g||!pager)return;
@@ -646,12 +722,11 @@ ${view === "testnet" ? feedHtml() : ""}
 ${view === "mainnet" ? splitHtml() : ""}
 ${consensusHtml(nets.map((n) => n.network))}
 ${clientsHtml((clients?.() ?? []).filter((h) => isTestnet(h.network) === (view === "testnet")))}
-<section class="card" id="stalls" style="margin-bottom:12px"><h2>Shard stalls${openInView > 0 ? ` <span class="pill bad">${openInView} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}</h2>
-<p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer on the same network kept going. When every reachable node of a network is stalled on a shard the rows are marked network-wide: that network stopped deciding blocks. Diffs on a stalled shard stay pending until it recovers. One line per node and shard with its latest stall; the last column counts the past 7 days; a line with several stalls opens on click.</p>${stallsHtml(stalls)}</section>
+${sec("stalls", "Shard stalls", `Shard stalls${openInView > 0 ? ` <span class="pill bad">${openInView} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}`, `<p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer on the same network kept going. When every reachable node of a network is stalled on a shard the rows are marked network-wide: that network stopped deciding blocks. Diffs on a stalled shard stay pending until it recovers. One line per node and shard with its latest stall; the last column counts the past 7 days; a line with several stalls opens on click.</p>${stallsHtml(stalls)}`)}
 ${
   view === "mainnet"
-    ? `<section class="card"><h2>Unexplained</h2><p class="muted">${nodeLabels.map((l) => `Missing on ${esc(l)}: ${summary.byMissingNode[l] ?? 0}`).join(" · ")}. Rows are rechecked for ${Math.round(cfg.recheckWindowMs / 3600000)} h; one that turns up on the missing side moves to sync lag and leaves this list.</p>${rowsHtml(unexplained, summary.byCause.unexplained)}</section>
-<section class="card" style="margin-top:12px"><h2>Pending</h2><p class="muted">Seen on one side, not yet old enough or not yet rechecked. Most resolve on their own.</p>${rowsHtml(pending, summary.byCause.pending)}</section>`
+    ? `${sec("unexplained", "Unexplained", "Unexplained", `<p class="muted">${nodeLabels.map((l) => `Missing on ${esc(l)}: ${summary.byMissingNode[l] ?? 0}`).join(" · ")}. Rows are rechecked for ${Math.round(cfg.recheckWindowMs / 3600000)} h; one that turns up on the missing side moves to sync lag and leaves this list.</p>${rowsHtml(unexplained, summary.byCause.unexplained)}`)}
+${sec("pending", "Pending", "Pending", `<p class="muted">Seen on one side, not yet old enough or not yet rechecked. Most resolve on their own.</p>${rowsHtml(pending, summary.byCause.pending)}`)}`
     : ""
 }
 </main></body></html>`);

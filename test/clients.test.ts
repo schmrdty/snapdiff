@@ -126,7 +126,7 @@ test("credit line: both env vars render a link under the card, one alone is a st
   const html = await (await buildApp(cfg as never, store, () => health).request("http://x/")).text();
   const plain = await (await buildApp({ ...cfg, clientHealthCredit: null } as never, store, () => health).request("http://x/")).text();
   await store.close();
-  assert.match(html, /<p class="muted" style="margin:8px 0 0">List from <a href="https:\/\/example.test\/list" rel="noopener noreferrer" target="_blank">a list on GitHub<\/a>.<\/p><\/section>/);
+  assert.match(html, /<p class="muted" style="margin:8px 0 0">List from <a href="https:\/\/example.test\/list" rel="noopener noreferrer" target="_blank">a list on GitHub<\/a>.<\/p>(<\/div>){3}<\/section>/);
   assert.doesNotMatch(plain, /List from/);
 });
 
