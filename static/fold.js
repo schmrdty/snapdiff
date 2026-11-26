@@ -9,7 +9,7 @@
 // State lives in localStorage per tab (mainnet or testnet) and per card id. Nothing leaves the
 // browser.
 (function () {
-  var view = /[?&]net=testnet(&|$)/.test(location.search) ? "testnet" : "mainnet";
+  var view = /[?&]view=cards(&|$)/.test(location.search) ? "cards" : /[?&]net=testnet(&|$)/.test(location.search) ? "testnet" : "mainnet";
   var KEY = "snapdiff.fold." + view + ".";
   var VIEW_KEY = "snapdiff.causesView";
   var SAFE = /^[A-Za-z0-9_.-]+$/;
@@ -32,7 +32,9 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     var boxes = [].slice.call(document.querySelectorAll(".fold-box[id]"));
-    function btnOf(box) { return box.firstElementChild && box.firstElementChild.querySelector(".fold"); }
+    // A box's own arrow is the one that controls its body (a section's head, a group's head line),
+    // matched on aria-controls rather than position. Node cards do not fold (Ryan, 2026-11-25).
+    function btnOf(box) { return box.querySelector('.fold[aria-controls="' + box.id + '-body"]'); }
     function setShut(box, isShut, save) {
       var b = btnOf(box);
       if (!isShut) {

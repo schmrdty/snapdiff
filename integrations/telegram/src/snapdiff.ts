@@ -4,18 +4,63 @@ export const DASHBOARD = 'https://snapdiff.schmidtiest.xyz';
 const API = `${DASHBOARD}/api`;
 type Row = { fid: number; hash: string; presentNodes: string[]; presentOn: string; missingOn: string; scope: string | null; cause: string; resolvedAt?: number | null };
 type Info = { reachable: boolean; maxBlockDelay: number | null; error?: string | null; provider?: string | null; version?: string | null } | null;
-type Summary = { nodes: string[]; networks: Record<string, string[]>; reference: string; summary: { byCause: Record<string, number>; byScope: Record<string, number>; openStalls: number }; info: Record<string, Info>; versions?: Record<string, string | null>; releases?: Record<string, { version?: string | null } | null> };
+type Meta = { name?: string; validator?: boolean; reference?: boolean; state?: string };
+type Summary = { nodes: string[]; networks: Record<string, string[]>; reference: string; meta?: Record<string, Meta>; summary: { byCause: Record<string, number>; byScope: Record<string, number>; openStalls: number }; info: Record<string, Info>; versions?: Record<string, string | null>; releases?: Record<string, { version?: string | null } | null> };
 type Client = { label?: string; name?: string; network: string; status: string; latencyMs?: number | null; latency?: number | null; checkedAt: number | null };
 type Stall = { side?: string; shardId?: number; scope?: string | null; endedAt: number | null };
 type Shard = { shardId: number; maxHeight: number; blockDelay: number };
 type Latest = { at: number; reachable: boolean; maxBlockDelay: number | null; error?: string | null; provider?: string | null; shards?: Shard[] } | null;
 type NodeVersion = { current: string | null; latest: string | null; behind: boolean };
-type NodeView = { label: string; name?: string; network: string; reference?: boolean; validator?: boolean; version?: NodeVersion; latest: Latest; window: { hours: number; samples: number; uptimePct: number | null; worstDelay: number | null; stalls: number }; stalls: { shardId: number; startedAt: number; endedAt: number | null }[] };
+type NodeView = { label: string; name?: string; network: string; reference?: boolean; validator?: boolean; state?: string; version?: NodeVersion; latest: Latest; window: { hours: number; samples: number; uptimePct: number | null; degraded?: number; worstDelay: number | null; stalls: number }; stalls: { shardId: number; startedAt: number; endedAt: number | null }[] };
 const safe = (s: unknown) => String(s ?? '').replace(/https?:\/\/\S+|[\x00-\x1f\x7f-\x9f]/gi, '').slice(0, 80);
 const age = (t: number | null, now: number) => t == null ? 'never' : `${Math.max(0, Math.floor((now - t) / 1000))}s ago`;
 // ", v0.17.4 (behind, newest 0.17.5)" or ", v0.17.5"; nothing when the API has no version for the node.
 const versionText = (v: NodeVersion | undefined) => v && typeof v.current === 'string' ? `, v${safe(v.current)}${v.behind && v.latest ? ` (behind, newest ${safe(v.latest)})` : ''}` : '';
 const UNAVAILABLE = `snapdiff api unavailable\n${DASHBOARD}`;
+/**
+ * The dashboard's words for a node, and its verdict (Ryan, 2026-11-25): snapdiff computes the
+ * state (src/server.ts nodeState, sent as /api/summary meta and /api/node state) and the bot
+ * repeats it instead of re-deriving it. "degraded" = answering but a shard is past the
+ * dashboard's behind line or stalled. An older API without the field falls back to
+ * reachable or not, the rule the bot had before.
+ */
+export type State = 'up' | 'degraded' | 'down' | 'no data';
+const STATES: readonly string[] = ['up', 'degraded', 'down', 'no data'];
+const pickState = (given: unknown, reachable: boolean | undefined): State =>
+  typeof given === 'string' && STATES.includes(given) ? given as State : reachable === undefined ? 'no data' : reachable ? 'up' : 'down';
+const stateOf = (s: Summary, label: string): State => pickState(s.meta?.[label]?.state, s.info[label] ? s.info[label]!.reachable === true : undefined);
+/** NODE_<K>_NAME as the dashboard prints it, else the label. */
+const nameOf = (s: Summary, label: string): string => safe(s.meta?.[label]?.name || label);
+/** The dashboard's delay format (src/server.ts fmtDelay): seconds, then minutes, then hours. */
+export const fmtDelay = (sec: number): string => (sec < 120 ? `${sec}s` : sec < 7200 ? `${Math.round(sec / 60)}m` : `${(sec / 3600).toFixed(1)}h`);
+const delayText = (d: unknown): string => (typeof d === 'number' ? fmtDelay(d) : 'unknown');
+/**
+ * The dashboard's order: Snapchain networks below the rest, and inside a network the reference
+ * first, then validators, then read nodes, each in config order. Labels not in any network go last.
+ */
+function ordered(s: Summary): { network: string; labels: string[] }[] {
+  const nets = Object.entries(s.networks).filter(([, ls]) => Array.isArray(ls))
+    .sort(([a], [b]) => Number(a.includes('snapchain')) - Number(b.includes('snapchain')));
+  const rank = (l: string) => (s.meta?.[l]?.reference ? 0 : s.meta?.[l]?.validator ? 1 : 2);
+  const out = nets.map(([network, ls]) => ({ network, labels: ls.filter(l => s.nodes.includes(l)).map((l, i) => ({ l, i })).sort((a, b) => rank(a.l) - rank(b.l) || a.i - b.i).map(x => x.l) }));
+  const placed = new Set(out.flatMap(n => n.labels));
+  const rest = s.nodes.filter(l => !placed.has(l));
+  return rest.length ? [...out, { network: 'unknown', labels: rest }] : out;
+}
+/** Label for a label or a dashboard name, any case; null when neither. */
+const findLabel = (s: Summary, x: string): string | null => {
+  const lower = x.toLowerCase();
+  return s.nodes.find(n => typeof n === 'string' && n.toLowerCase() === lower)
+    ?? s.nodes.find(n => typeof n === 'string' && (s.meta?.[n]?.name ?? '').toLowerCase() === lower) ?? null;
+};
+/** "up, delay 2s via host", "degraded, delay 16.6h via host", "down, <error>", "no data yet". */
+const stateText = (state: State, i: Info | Latest | undefined): string => {
+  if (state === 'no data' || !i) return 'no data yet';
+  if (state === 'down') return `down${i.error ? `, ${safe(i.error)}` : ''}`;
+  return `${state}, delay ${delayText(i.maxBlockDelay)}${i.provider ? ` via ${safe(i.provider)}` : ''}`;
+};
+/** /status lists every node; this bounds one Telegram message (4096 characters) if the list grows. */
+export const MAX_STATUS_NODES = 40;
 export class Snapdiff {
   private cache = new Map<string, { until: number; value: unknown }>();
   private inflight = new Map<string, Promise<unknown>>();
@@ -56,12 +101,14 @@ export class Snapdiff {
     return { s, open };
   }
   private networkLine(s: Summary): string {
-    const parts = Object.entries(s.networks).map(([network, labels]) => {
-      if (!Array.isArray(labels)) throw Error('invalid network');
-      const members = labels.filter(label => s.nodes.includes(label));
-      const up = members.filter(label => s.info[label]?.reachable);
-      const delays = up.map(label => s.info[label]?.maxBlockDelay).filter((v): v is number => typeof v === 'number');
-      return `${safe(network)} ${up.length}/${members.length} up, worst delay ${delays.length ? `${Math.max(...delays)}s` : 'unknown'}`;
+    if (Object.values(s.networks).some(ls => !Array.isArray(ls))) throw Error('invalid network');
+    // Degraded counts as answering, as on the dashboard's network badge.
+    const parts = ordered(s).filter(n => n.network !== 'unknown').map(({ network, labels: members }) => {
+      const states = members.map(l => stateOf(s, l));
+      const answering = states.filter(x => x === 'up' || x === 'degraded').length;
+      const degraded = states.filter(x => x === 'degraded').length;
+      const delays = members.filter(l => s.info[l]?.reachable).map(l => s.info[l]?.maxBlockDelay).filter((v): v is number => typeof v === 'number');
+      return `${safe(network)} ${answering}/${members.length} answering${degraded ? ` (${degraded} degraded)` : ''}, worst delay ${delays.length ? fmtDelay(Math.max(...delays)) : 'unknown'}`;
     });
     return parts.join('; ') || 'no networks reported';
   }
@@ -79,15 +126,15 @@ export class Snapdiff {
    * old answer ("not listed in client health") read as a failure. Null when X is not a node.
    */
   private nodeLine(s: Summary, name: string): string | null {
-    const label = s.nodes.find(n => typeof n === 'string' && n.toLowerCase() === name.toLowerCase());
+    const label = findLabel(s, name);
     if (!label) return null;
     const network = Object.entries(s.networks).find(([, members]) => Array.isArray(members) && members.includes(label))?.[0] ?? 'unknown';
     const i = s.info[label];
-    const who = `${safe(label)} (${safe(network)} node)`;
-    const more = `; /node ${safe(label)} for its last 24 h`;
-    if (!i) return `${who}: no data yet${more}`;
-    if (!i.reachable) return `${who}: down${i.error ? `, ${safe(i.error)}` : ''}${more}`;
-    return `${who}: up, delay ${typeof i.maxBlockDelay === 'number' ? `${i.maxBlockDelay}s` : 'unknown'}${i.provider ? ` via ${safe(i.provider)}` : ''}${typeof i.version === 'string' ? `, v${safe(i.version)}` : ''}${more}`;
+    const state = stateOf(s, label);
+    const who = `${nameOf(s, label)} (${safe(network)} node)`;
+    const more = `; /node ${nameOf(s, label)} for its last 24 h`;
+    const ver = state !== 'down' && state !== 'no data' && typeof i?.version === 'string' ? `, v${safe(i.version)}` : '';
+    return `${who}: ${stateText(state, i)}${ver}${more}`;
   }
   /** /snapdiff and mentions: the network picture and open diff counts, plus one node or client when asked "is X down". */
   async summary(clientName?: string): Promise<string> {
@@ -116,16 +163,12 @@ export class Snapdiff {
       const { s, open } = await this.summaryAndStalls();
       const c = await this.get<{ clients: Client[] }>('/clients');
       if (!Array.isArray(c.clients)) throw Error('invalid clients');
-      const networkOf = new Map<string, string>();
-      for (const [network, labels] of Object.entries(s.networks)) if (Array.isArray(labels)) for (const l of labels) networkOf.set(l, network);
       const lines = [this.networkLine(s)];
-      for (const label of s.nodes.slice(0, 12)) {
-        const i = s.info[label];
-        const who = `${safe(label)} (${safe(networkOf.get(label) ?? 'unknown')})`;
-        if (!i) lines.push(`${who}: no data yet`);
-        else if (!i.reachable) lines.push(`${who}: down${i.error ? `, ${safe(i.error)}` : ''}`);
-        else lines.push(`${who}: up, delay ${typeof i.maxBlockDelay === 'number' ? `${i.maxBlockDelay}s` : 'unknown'}${i.provider ? ` via ${safe(i.provider)}` : ''}`);
-      }
+      // Every node, in the dashboard's order. It used to stop at the first 12 in config order,
+      // which left out 10 of 22 nodes on 2026-11-25 (astrix, castrater, most of Snapchain, testnet).
+      const all = ordered(s).flatMap(n => n.labels.map(label => ({ label, network: n.network })));
+      for (const { label, network } of all.slice(0, MAX_STATUS_NODES)) lines.push(`${nameOf(s, label)} (${safe(network)}): ${stateText(stateOf(s, label), s.info[label] ?? undefined)}`);
+      if (all.length > MAX_STATUS_NODES) lines.push(`${all.length - MAX_STATUS_NODES} more nodes on the dashboard`);
       lines.push(c.clients.length ? `clients: ${c.clients.slice(0, 10).map(x => `${safe(x.label ?? x.name)} ${safe(x.status)}`).join(', ')}` : 'clients: none watched');
       if (open > 0) lines.push(`stalls: ${open} open`);
       return [...lines, DASHBOARD].join('\n');
@@ -136,18 +179,25 @@ export class Snapdiff {
     try {
       let v: NodeView;
       try { v = await this.get<NodeView>(`/node/${encodeURIComponent(label)}`); }
-      catch (e) { if (e instanceof Error && e.message === 'snapdiff http 404') return `${safe(label)}: not a listed node, /status lists them\n${DASHBOARD}`; throw e; }
+      catch (e) {
+        if (!(e instanceof Error && e.message === 'snapdiff http 404')) throw e;
+        // Not a label: it may be the name the dashboard and /status print (NODE_<K>_NAME).
+        let real: string | null = null;
+        try { const s = await this.get<Summary>('/summary'); real = Array.isArray(s.nodes) ? findLabel(s, label) : null; } catch { real = null; }
+        if (real === null || real === label) return `${safe(label)}: not a listed node, /status lists them\n${DASHBOARD}`;
+        v = await this.get<NodeView>(`/node/${encodeURIComponent(real)}`);
+      }
       if (typeof v.label !== 'string' || !v.window) throw Error('invalid node');
       const now = this.now();
       const who = `${safe(v.name ?? v.label)} (${safe(v.network)}${v.validator ? ' validator' : ''}${v.reference ? ', reference' : ''})`;
       const l = v.latest;
       const lines: string[] = [];
+      const state = l ? pickState(v.state, l.reachable === true) : 'no data';
       if (!l) lines.push(`${who}: no data yet`);
-      else if (!l.reachable) lines.push(`${who}: down${l.error ? `, ${safe(l.error)}` : ''}, checked ${age(l.at, now)}`);
-      else lines.push(`${who}: up, delay ${typeof l.maxBlockDelay === 'number' ? `${l.maxBlockDelay}s` : 'unknown'}${l.provider ? ` via ${safe(l.provider)}` : ''}, checked ${age(l.at, now)}${versionText(v.version)}`);
+      else lines.push(`${who}: ${stateText(state, l)}, checked ${age(l.at, now)}${state === 'down' ? '' : versionText(v.version)}`);
       const w = v.window;
-      lines.push(`last ${w.hours}h: ${w.samples} checks, ${w.uptimePct ?? 'unknown'}% up, worst delay ${typeof w.worstDelay === 'number' ? `${w.worstDelay}s` : 'unknown'}, stalls ${w.stalls}`);
-      if (l?.reachable && Array.isArray(l.shards) && l.shards.length) lines.push(`shards: ${l.shards.slice(0, 8).map(s => `${s.shardId} at ${Number(s.maxHeight).toLocaleString('en-US')} (${s.blockDelay}s)`).join('; ')}`);
+      lines.push(`last ${w.hours}h: ${w.samples} checks, ${w.uptimePct ?? 'unknown'}% up${typeof w.degraded === 'number' && w.degraded > 0 ? ` (${w.degraded} of them degraded)` : ''}, worst delay ${delayText(w.worstDelay)}, stalls ${w.stalls}`);
+      if (l?.reachable && Array.isArray(l.shards) && l.shards.length) lines.push(`shards: ${l.shards.slice(0, 8).map(s => `${s.shardId} at ${Number(s.maxHeight).toLocaleString('en-US')} (${fmtDelay(Number(s.blockDelay))})`).join('; ')}`);
       const st = Array.isArray(v.stalls) ? v.stalls[0] : undefined;
       if (st) lines.push(`last stall: shard ${st.shardId}, started ${age(st.startedAt, now)}, ${st.endedAt == null ? 'still open' : `lasted ${Math.max(1, Math.round((st.endedAt - st.startedAt) / 60000))} min`}`);
       return [...lines, DASHBOARD].join('\n');
@@ -159,6 +209,23 @@ export class Snapdiff {
       const s = await this.get<Summary>('/summary');
       return Array.isArray(s.nodes) ? s.nodes.filter((n): n is string => typeof n === 'string') : null;
     } catch { return null; }
+  }
+  /**
+   * /subscribe and /unsubscribe: the label for a label or a dashboard name. null when it is
+   * neither, undefined when the API is unavailable.
+   */
+  async resolve(x: string): Promise<string | null | undefined> {
+    try {
+      const s = await this.get<Summary>('/summary');
+      return Array.isArray(s.nodes) ? findLabel(s, x) : undefined;
+    } catch { return undefined; }
+  }
+  /** Dashboard name per label, for printing a chat's subscriptions; an empty map when unavailable. */
+  async names(): Promise<Map<string, string>> {
+    try {
+      const s = await this.get<Summary>('/summary');
+      return new Map(Array.isArray(s.nodes) ? s.nodes.map(l => [l, nameOf(s, l)] as const) : []);
+    } catch { return new Map(); }
   }
   /** Poller input: reachability and open stalled shards for the followed labels. Null when the API is unavailable, so the caller keeps its baseline. */
   async nodeStates(labels: string[]): Promise<Map<string, NodeState> | null> {
@@ -184,7 +251,8 @@ export class Snapdiff {
         const latestVersion = s.versions && typeof s.versions[network] === 'string' ? safe(s.versions[network]) : null;
         const rel = s.releases ? s.releases[network] : null;
         const published = rel && typeof rel.version === 'string' ? safe(rel.version) : null;
-        out.set(label, { network: safe(network), reachable: i ? i.reachable === true : null, error: i && !i.reachable && i.error ? safe(i.error) : null, stalledShards, networkStalledShards, version: i && typeof i.version === 'string' ? safe(i.version) : null, latestVersion, published });
+        const st = stateOf(s, label);
+        out.set(label, { name: nameOf(s, label), degraded: s.meta?.[label]?.state === undefined ? null : st === 'degraded', delay: i && i.reachable && typeof i.maxBlockDelay === 'number' ? i.maxBlockDelay : null, network: safe(network), reachable: i ? i.reachable === true : null, error: i && !i.reachable && i.error ? safe(i.error) : null, stalledShards, networkStalledShards, version: i && typeof i.version === 'string' ? safe(i.version) : null, latestVersion, published });
       }
       return out;
     } catch { return null; }

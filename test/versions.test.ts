@@ -47,7 +47,7 @@ test("page and API: the card shows the version and a behind pill; /api/node and 
   await store.recordInfo(snap("ohsnap", true, "0.17.4"));
   await store.recordInfo(snap("quiet", true, null));
   const app = buildApp(cfg, store);
-  const html = await (await app.request("http://x/")).text();
+  const html = await (await app.request("http://x/?view=cards")).text();
   const behind = (await (await app.request("http://x/api/node/ohsnap")).json()) as { version: unknown };
   const current = (await (await app.request("http://x/api/node/hypersnap")).json()) as { version: unknown };
   const none = (await (await app.request("http://x/api/node/quiet")).json()) as { version: unknown };
@@ -56,7 +56,7 @@ test("page and API: the card shows the version and a behind pill; /api/node and 
   assert.match(html, /<h2>ohsnap [\s\S]*?<p class="muted">v0\.17\.4 <span class="pill bad" title="newest on this network: 0\.17\.5">behind 0\.17\.5<\/span><\/p>/, "behind pill on the lagging card");
   assert.match(html, /<h2>hypersnap [\s\S]*?<p class="muted">v0\.17\.5<\/p>/, "plain version line on the newest");
   assert.doesNotMatch(html.slice(html.indexOf("<h2>snapchain "), html.indexOf("</section>", html.indexOf("<h2>snapchain "))), /behind/, "the other network is judged on its own");
-  assert.doesNotMatch(html, /<h2>quiet [\s\S]*?<p class="muted">v/, "no version line when the node reports none");
+  assert.doesNotMatch(html.slice(html.indexOf("<h2>quiet "), html.indexOf("</section>", html.indexOf("<h2>quiet "))), /<p class="muted">v/, "no version line when the node reports none");
   assert.deepEqual(behind.version, { current: "0.17.4", latest: "0.17.5", behind: true });
   assert.deepEqual(current.version, { current: "0.17.5", latest: "0.17.5", behind: false });
   assert.deepEqual(none.version, { current: null, latest: "0.17.5", behind: false });

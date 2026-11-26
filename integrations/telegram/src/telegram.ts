@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { Snapdiff, DASHBOARD } from './snapdiff.ts';
 import { match, COMMAND_MENU } from './trigger.ts';
 import { forwardText, recordFeedback } from './feedback.ts';
-import { SubStore, diffEvents, allow, POLL_MS, MAX_LABELS_PER_CHAT, MAX_SENDS_PER_TICK, type NodeState } from './subscriptions.ts';
+import { SubStore, diffEvents, allow, loadQuiet, saveQuiet, POLL_MS, MAX_LABELS_PER_CHAT, MAX_SENDS_PER_TICK, type NodeState } from './subscriptions.ts';
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw Error('TELEGRAM_BOT_TOKEN required');
 const bot = new Bot(token);
@@ -17,16 +17,18 @@ const tipText = process.env.TIP_TEXT?.trim() || 'tips are not set up yet';
 // the working directory is read-only under ProtectSystem=strict.
 const subsFile = process.env.SUBSCRIPTIONS_FILE ?? `${process.env.STATE_DIRECTORY ?? '.'}/subscriptions.json`;
 const subs = new SubStore(subsFile);
+// Quiet timers next to the subscriptions, so they outlive a restart (see loadQuiet).
+const quietFile = process.env.QUIET_FILE ?? `${process.env.STATE_DIRECTORY ?? '.'}/quiet.json`;
 // Per-user reply spacing. 20 s read as the bot ignoring people in a busy group; 12 s still blocks a flood (Ryan, 2026-11-13).
 const LIMIT_MS = 12_000;
 const HELP: Record<string, string> = {
   help: 'commands: /snapdiff network summary, /status every node and client, /consensus validators able to vote per shard, /fid 123 open diffs for one FID, /node LABEL one node over 24 h, /subscribe LABEL node events by DM, /unsubscribe, /feedback your note, /tip. Add "is <node or client> down" to /snapdiff to check one. Reply "stop" to mute me for you.',
   snapdiff: 'usage: /snapdiff. Networks up, worst block delay, open diff counts. Add "is <node or client> down" to check one node or client.',
-  status: 'usage: /status. Every node (up or down, block delay, which provider answered) and every watched client.',
+  status: 'usage: /status. Every node, in the dashboard order and with its dashboard name (up, degraded, or down; block delay; which provider answered) and every watched client. Degraded means it answers but is behind or stalled.',
   consensus: 'usage: /consensus. For each network with a validators file, per shard: how many validators of the current set are at the tip and can vote, the quorum a block needs, and who is behind, down, or not monitored. Block signers are not on the HTTP API, so this is the nearest measurable thing to signing.',
   fid: 'usage: /fid 123, digits only. Lists open diffs for that FID: which nodes have each cast and which are missing it.',
-  node: 'usage: /node LABEL, the label as /status prints it. That node now, its last 24 h (checks, uptime, worst delay, stalls), shard heights, and its newest stall.',
-  subscribe: `usage: /subscribe LABEL, in a private chat with me. I message you when that node goes down, comes back, a shard stalls or recovers, or its version falls behind the newest on its network (checked once a minute, one message per event type per 10 min). Up to ${MAX_LABELS_PER_CHAT} nodes per chat. /subscribe alone lists yours.`,
+  node: 'usage: /node NAME, the name as /status prints it (the label works too). That node now, its last 24 h (checks, uptime, worst delay, stalls), shard heights, and its newest stall.',
+  subscribe: `usage: /subscribe LABEL, in a private chat with me. I message you when that node goes down, comes back, turns degraded (answering but behind) or catches up, a shard stalls or recovers, or its version falls behind the newest on its network (checked once a minute, one message per event type per 10 min). Up to ${MAX_LABELS_PER_CHAT} nodes per chat. /subscribe alone lists yours.`,
   unsubscribe: 'usage: /unsubscribe LABEL to stop following one node, /unsubscribe alone to stop all.',
   feedback: 'usage: /feedback your note. Goes to the operator. This is the only message text the bot keeps.',
   tip: 'usage: /tip. Shows where to send a tip toward node and server costs, once the operator has set one up.',
@@ -90,20 +92,22 @@ bot.catch(() => console.error(new Date().toISOString(), 'telegram handler error'
 
 async function subscribeReply(command: string, chat: number, direct: boolean, label?: string): Promise<string> {
   if (!direct) return 'subscriptions work in a private chat with me only, so a group is never flooded';
+  // A name as the dashboard and /status print it (NODE_<K>_NAME) means its label; subscriptions store labels.
+  const real = label === undefined ? undefined : await service.resolve(label);
   if (command === 'unsubscribe') {
-    const n = subs.remove(chat, label);
+    const n = subs.remove(chat, label === undefined ? undefined : real ?? label);
     if (label !== undefined) return n ? `stopped following ${label}` : `you were not following ${label}`;
     return n ? `stopped following ${n} node${n === 1 ? '' : 's'}` : 'you follow nothing';
   }
   if (label === undefined) {
     const mine = subs.list(chat);
-    return mine.length ? `you follow: ${mine.join(', ')}. /unsubscribe LABEL to stop one.` : HELP.subscribe!;
+    const names = await service.names();
+    return mine.length ? `you follow: ${mine.map(l => names.get(l) ?? l).join(', ')}. /unsubscribe NAME to stop one.` : HELP.subscribe!;
   }
-  const nodes = await service.nodeList();
-  if (!nodes) return 'snapdiff api unavailable, try again in a minute';
-  if (!nodes.includes(label)) return `${label}: not a listed node, /status lists them`;
-  const r = subs.add(chat, label);
-  if (r === 'added') return `following ${label}: I will message you here when it goes down, comes back, a shard stalls or recovers, or its version falls behind`;
+  if (real === undefined) return 'snapdiff api unavailable, try again in a minute';
+  if (real === null) return `${label}: not a listed node, /status lists them`;
+  const r = subs.add(chat, real);
+  if (r === 'added') return `following ${label}: I will message you here when it goes down, comes back, turns degraded or catches up, a shard stalls or recovers, or its version falls behind`;
   if (r === 'already') return `you already follow ${label}`;
   if (r === 'chat-full') return `you already follow ${MAX_LABELS_PER_CHAT} nodes, /unsubscribe one first`;
   return 'the bot has reached its subscriber limit for now, ask the operator';
@@ -113,7 +117,7 @@ async function subscribeReply(command: string, chat: number, direct: boolean, la
 // transitions, bundled into one message per chat, capped per tick. A 403 from Telegram
 // means the person blocked the bot: that chat is dropped so it never retries.
 const seen = new Map<string, NodeState>();
-const quiet = new Map<string, number>();
+const quiet = loadQuiet(quietFile, Date.now());
 let polling = false;
 async function pollEvents(): Promise<void> {
   if (polling) return;
@@ -126,12 +130,16 @@ async function pollEvents(): Promise<void> {
     if (!states) return;
     const now = Date.now();
     const perChat = new Map<number, string[]>();
+    let armed = false;
     for (const [label, next] of states) {
       const events = diffEvents(label, seen.get(label), next).filter(e => allow(quiet, e, now));
+      if (events.length) armed = true;
       seen.set(label, next);
       // Same text once per chat: a network-wide pause is worded without the label, so two followed nodes of one network produce one line.
       for (const e of events) for (const chat of subs.chatsFor(label)) { const cur = perChat.get(chat) ?? []; if (!cur.includes(e.text)) perChat.set(chat, [...cur, e.text]); }
     }
+    // Saved before sending: a crash mid-send then errs toward silence, never a repeat.
+    if (armed) { try { saveQuiet(quietFile, quiet, now); } catch { console.error(new Date().toISOString(), 'quiet file write failed'); } }
     let sent = 0;
     for (const [chat, lines] of perChat) {
       if (sent >= MAX_SENDS_PER_TICK) break;

@@ -4,9 +4,10 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 //   - private chats only, so a group can never be flooded by one member's choice;
 //   - at most MAX_LABELS_PER_CHAT labels per chat and MAX_CHATS chats in total;
 //   - one poll a minute against the public API, and no poll at all while nobody subscribes;
-//   - eight event kinds only (down, back up, shard stalled, stall ended, left behind when the
+//   - ten event kinds only (down, back up, shard stalled, stall ended, left behind when the
 //     rest of the network moves again, version behind, version current again, release
-//     published while the node runs something older), each silenced
+//     published while the node runs something older, and since 2026-11-25 degraded and
+//     caught up, the dashboard's yellow pill for a node that answers but is behind), each silenced
 //     per label for QUIET_MS after it fires, and at most MAX_SENDS_PER_TICK messages per poll.
 //     A stall on every node of the network is worded as the network's pause, without the
 //     label, so a chat following two nodes of one network reads it once.
@@ -75,8 +76,11 @@ export class SubStore {
   }
 }
 
-export type NodeState = { network: string; reachable: boolean | null; error: string | null; stalledShards: number[]; /** Subset of stalledShards whose stall is the whole network's (scope "network" on /api/stalls). */ networkStalledShards: number[]; version: string | null; latestVersion: string | null; /** Newest version the project has published for this network (/api/summary releases), null when unknown or off. */ published: string | null };
-export type EventKind = 'down' | 'up' | 'stall' | 'stall-ended' | 'left-behind' | 'behind' | 'current' | 'release';
+export type NodeState = { /** Dashboard name (NODE_<K>_NAME), else absent and the label is printed. */ name?: string; /** The dashboard's degraded verdict (answering, but behind or stalled); null or absent when the API does not say. */ degraded?: boolean | null; /** Worst block delay in seconds while answering. */ delay?: number | null; network: string; reachable: boolean | null; error: string | null; stalledShards: number[]; /** Subset of stalledShards whose stall is the whole network's (scope "network" on /api/stalls). */ networkStalledShards: number[]; version: string | null; latestVersion: string | null; /** Newest version the project has published for this network (/api/summary releases), null when unknown or off. */ published: string | null };
+export type EventKind = 'down' | 'up' | 'stall' | 'stall-ended' | 'left-behind' | 'behind' | 'current' | 'release' | 'degraded' | 'caught-up';
+/** The dashboard's delay format (seconds, minutes, hours); kept local because the bot is its own package. */
+const fmtDelay = (sec: number): string => (sec < 120 ? `${sec}s` : sec < 7200 ? `${Math.round(sec / 60)}m` : `${(sec / 3600).toFixed(1)}h`);
+const delayPart = (s: NodeState) => (typeof s.delay === 'number' ? `, delay ${fmtDelay(s.delay)}` : '');
 export type Event = { label: string; kind: EventKind; text: string };
 
 /** Numeric dot-part order ("0.17.5" > "0.17.4"); the same rule as snapdiff's src/versions.ts, kept local because the bot is its own package. */
@@ -100,9 +104,14 @@ export const isBehind = (s: NodeState): boolean => s.version !== null && s.lates
 export function diffEvents(label: string, prev: NodeState | undefined, next: NodeState): Event[] {
   if (!prev) return [];
   const out: Event[] = [];
-  const who = `${label} (${next.network})`;
+  const who = `${next.name ?? label} (${next.network})`;
   if (prev.reachable === true && next.reachable === false) out.push({ label, kind: 'down', text: `${who}: down${next.error ? `, ${next.error}` : ''}` });
-  if (prev.reachable === false && next.reachable === true) out.push({ label, kind: 'up', text: `${who}: back up` });
+  // A node that comes back behind (a restart, catching up) says so, as its yellow pill does.
+  if (prev.reachable === false && next.reachable === true) out.push({ label, kind: 'up', text: `${who}: back up${next.degraded === true ? `, still catching up${delayPart(next)}` : ''}` });
+  // Degraded and caught up, while answering on both polls. A stall has its own events, so these
+  // fire only when no shard of the node is stalled (Ryan, 2026-11-25).
+  if (prev.reachable === true && next.reachable === true && prev.degraded === false && next.degraded === true && next.stalledShards.length === 0) out.push({ label, kind: 'degraded', text: `${who}: degraded, answering but behind${delayPart(next)}` });
+  if (prev.reachable === true && next.reachable === true && prev.degraded === true && next.degraded === false && prev.stalledShards.length === 0) out.push({ label, kind: 'caught-up', text: `${who}: caught up${delayPart(next)}` });
   const netWide = (st: NodeState, s: number) => st.networkStalledShards.includes(s);
   for (const s of next.stalledShards) if (!prev.stalledShards.includes(s)) out.push({ label, kind: 'stall', text: netWide(next, s) ? `${next.network}: shard ${s} stopped on every node (network-wide pause)` : `${who}: shard ${s} stalled` });
   for (const s of prev.stalledShards) if (!next.stalledShards.includes(s)) out.push({ label, kind: 'stall-ended', text: netWide(prev, s) ? `${next.network}: shard ${s} moving again on every node` : `${who}: shard ${s} stall ended` });
@@ -129,4 +138,27 @@ export function allow(quiet: Map<string, number>, e: Event, now: number): boolea
   if ((quiet.get(key) ?? 0) > now) return false;
   quiet.set(key, now + QUIET_MS);
   return true;
+}
+
+// The quiet timers are kept on disk so a restart (a deploy, a crash) does not reopen every
+// window: before 2026-11-25 a node flapping across a restart was announced again at once
+// (Ryan, 2026-11-25: "I need the quiet timers that stop alerts repeating"). The file holds
+// "label:kind" keys and expiry times in ms, nothing else. Expired entries are dropped on load
+// and on save, and an expiry further out than QUIET_MS is treated as corrupt and ignored.
+const QUIET_KEY = /^[\w.-]{1,40}:[a-z-]{1,16}$/;
+export function loadQuiet(file: string, now: number): Map<string, number> {
+  const out = new Map<string, number>();
+  let raw: unknown;
+  try { raw = JSON.parse(readFileSync(file, 'utf8')); } catch { return out; }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (QUIET_KEY.test(k) && typeof v === 'number' && Number.isFinite(v) && v > now && v <= now + QUIET_MS) out.set(k, v);
+  }
+  return out;
+}
+export function saveQuiet(file: string, quiet: Map<string, number>, now: number): void {
+  for (const [k, v] of quiet) if (v <= now) quiet.delete(k);
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, JSON.stringify(Object.fromEntries(quiet)), { mode: 0o600 });
+  renameSync(tmp, file);
 }

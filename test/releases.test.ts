@@ -88,7 +88,7 @@ test("page and API: published pill only when the project is ahead of the node an
   await store.recordInfo(snap("ohsnap", "0.17.10"));
   const rel = { hypersnap: { network: "hypersnap", version: "0.17.12", publishedAt: Date.now() - 7_200_000, checkedAt: Date.now(), error: null }, snapchain: { network: "snapchain", version: "0.16.0", publishedAt: null, checkedAt: Date.now(), error: null } };
   const app = buildApp(cfg, store, undefined, () => rel);
-  const html = await (await app.request("http://x/")).text();
+  const html = await (await app.request("http://x/?view=cards")).text();
   const summary = (await (await app.request("http://x/api/summary")).json()) as { releases: unknown };
   const nodeJson = (await (await app.request("http://x/api/node/ohsnap")).json()) as { release: unknown };
   const off = await (await buildApp(cfg, store).request("http://x/api/summary")).json() as { releases: unknown };
@@ -108,7 +108,7 @@ test("page: when a peer already runs the published version the behind pill carri
   await store.recordInfo(snap("hypersnap", "0.17.12"));
   await store.recordInfo(snap("ohsnap", "0.17.11"));
   const rel = { hypersnap: { network: "hypersnap", version: "0.17.12", publishedAt: Date.now(), checkedAt: Date.now(), error: null } };
-  const html = await (await buildApp(cfg, store, undefined, () => rel).request("http://x/")).text();
+  const html = await (await buildApp(cfg, store, undefined, () => rel).request("http://x/?view=cards")).text();
   await store.close();
   assert.match(html, /<h2>ohsnap [\s\S]*?<p class="muted">v0\.17\.11 <span class="pill bad" title="newest on this network: 0\.17\.12">behind 0\.17\.12<\/span><\/p>/, "one pill, not two with the same number");
   assert.doesNotMatch(html, /published<\/span>/);

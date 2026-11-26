@@ -45,7 +45,7 @@ test('/snapdiff: network line, counts, optional client line, endpoint gating, ca
   const calls: string[] = [];
   const api = new Snapdiff(sampleFetch(calls), () => 130000);
   const one = await api.summary('Quilcast');
-  assert.match(one, /snapchain 1\/1 up, worst delay 2s; hypersnap 1\/2 up, worst delay 6s/);
+  assert.match(one, /^hypersnap 1\/2 answering, worst delay 6s; snapchain 1\/1 answering, worst delay 2s$/m, 'dashboard order: Snapchain last');
   assert.match(one, /unexplained: node 1, network 1; pending 1; stalls 1/);
   assert.match(one, /Quilcast: degraded, latency 210ms, checked 30s ago/);
   assert.equal(one.split('\n').length, 4);
@@ -77,10 +77,10 @@ test('/status: one line per node with network, clients line, stalls line, no dif
   const api = new Snapdiff(sampleFetch(), () => 130000);
   const text = await api.status();
   const lines = text.split('\n');
-  assert.match(lines[0]!, /snapchain 1\/1 up/);
-  assert.equal(lines[1], 'snap-a (snapchain): up, delay 2s');
-  assert.equal(lines[2], 'hyper-a (hypersnap): up, delay 6s');
-  assert.equal(lines[3], 'hyper-b (hypersnap): down');
+  assert.match(lines[0]!, /snapchain 1\/1 answering/);
+  assert.equal(lines[1], 'hyper-a (hypersnap): up, delay 6s');
+  assert.equal(lines[2], 'hyper-b (hypersnap): down');
+  assert.equal(lines[3], 'snap-a (snapchain): up, delay 2s');
   assert.equal(lines[4], 'clients: Quilcast degraded');
   assert.equal(lines[5], 'stalls: 1 open');
   assert.ok(!text.includes('unexplained'), 'status does not repeat the diff counts');

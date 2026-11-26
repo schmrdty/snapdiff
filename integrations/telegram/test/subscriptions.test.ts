@@ -99,7 +99,7 @@ test('nodeStates: one summary call (plus stalls when open) gives reachability an
   const api = new Snapdiff((async (url: string) => { const key = new URL(url).pathname.split('/').at(-1)!; calls.push(key); return { ok: true, json: async () => sample[key] } as Response; }) as typeof fetch, () => 130000);
   const states = await api.nodeStates(['hyper-a', 'hyper-b', 'ghost']);
   assert.ok(states);
-  assert.deepEqual(states.get('hyper-a'), { network: 'hypersnap', reachable: true, error: null, stalledShards: [1], networkStalledShards: [1], version: null, latestVersion: null, published: null }, 'a summary without versions gives null, never a guess; the open stall is scope network in the sample');
+  assert.deepEqual(states.get('hyper-a'), { name: 'hyper-a', degraded: null, delay: 6, network: 'hypersnap', reachable: true, error: null, stalledShards: [1], networkStalledShards: [1], version: null, latestVersion: null, published: null }, 'a summary without versions gives null, never a guess; the open stall is scope network in the sample');
   const versioned = { ...sample, summary: { ...sample.summary, versions: { hypersnap: '0.17.5' }, info: { ...sample.summary.info, 'hyper-a': { ...sample.summary.info['hyper-a'], version: '0.17.4' } } } };
   const vapi = new Snapdiff((async (url: string) => ({ ok: true, json: async () => versioned[new URL(url).pathname.split('/').at(-1)!] }) as Response) as typeof fetch, () => 130000);
   const vs = await vapi.nodeStates(['hyper-a', 'hyper-b']);

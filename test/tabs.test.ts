@@ -30,7 +30,7 @@ test("tabs: testnet nodes appear only on /?net=testnet, mainnet sections stay of
   await store.close();
 
   assert.match(main, /<h1>snapdiff: snapchain \(1 node\) vs hypersnap \(1 node\)<\/h1>/, "the mainnet title counts mainnet networks only");
-  assert.match(main, /<nav class="tabs"><a class="tab on" href="\/">Mainnet \(2 nodes\)<\/a><a class="tab tn" href="\/\?net=testnet">Testnet \(2 nodes\)<\/a><\/nav>/);
+  assert.match(main, /<nav class="tabs"><a class="tab on" href="\/">Mainnet \(2 nodes\)<\/a><a class="tab" href="\/\?view=cards">Node cards<\/a><a class="tab tn" href="\/\?net=testnet">Testnet \(2 nodes\)<\/a><\/nav>/);
   assert.doesNotMatch(main, /data-net="hypersnap-testnet"/, "no testnet card on the mainnet tab");
   assert.match(main, /<div class="stats">/, "relay counts stay on mainnet");
 
@@ -45,14 +45,14 @@ test("tabs: testnet nodes appear only on /?net=testnet, mainnet sections stay of
   assert.deepEqual(summary.nodes, ["snapchain", "hypersnap", "testnet-0", "testnet-rn"], "the API keeps every node");
 });
 
-test("tabs: no tab bar without a testnet network, and ?net=testnet falls back to the mainnet view", async () => {
+test("tabs: no Testnet tab without a testnet network, and ?net=testnet falls back to the mainnet view", async () => {
   const cfg = { ...loadConfig(), nodes: [node("snapchain", "snapchain"), node("hypersnap", "hypersnap")], reference: "snapchain", references: { snapchain: "snapchain", hypersnap: "hypersnap" } };
   const store = new SqliteStore(":memory:");
   const app = buildApp(cfg, store);
   const main = await (await app.request("http://x/")).text();
   const forced = await (await app.request("http://x/?net=testnet")).text();
   await store.close();
-  assert.doesNotMatch(main, /class="tabs"/);
+  assert.match(main, /<nav class="tabs"><a class="tab on" href="\/">Mainnet \(2 nodes\)<\/a><a class="tab" href="\/\?view=cards">Node cards<\/a><\/nav>/, "Mainnet and Node cards only");
   assert.match(forced, /<h1>snapdiff: snapchain \(1 node\) vs hypersnap \(1 node\)<\/h1>/);
 });
 
@@ -103,12 +103,15 @@ test("node index: every node of the view is listed once and links to a card that
   const store = new SqliteStore(":memory:");
   for (const l of ["snapchain", "hypersnap", "val.two", "reader", "testnet-0"]) await store.recordInfo(snap(l));
   const html = await (await buildApp(cfg, store).request("http://x/")).text();
+  const cards = await (await buildApp(cfg, store).request("http://x/?view=cards")).text();
   await store.close();
-  const index = html.slice(html.indexOf('id="index"'), html.indexOf('id="nodes"'));
-  const links = [...index.matchAll(/<a class="irow" href="#node-([^"]+)"/g)].map((m) => decodeURIComponent(m[1]!));
+  const index = html.slice(html.indexOf('id="index"'), html.indexOf('id="stalls"'));
+  // Since 2026-11-25 the cards live on the Node cards tab; each index row opens its card there.
+  const links = [...index.matchAll(/<a class="irow" href="\/\?view=cards#node-([^"]+)"/g)].map((m) => decodeURIComponent(m[1]!));
   // Snapchain sorts below Hypersnap (Ryan, 2026-11-24); within a network: reference, validators, read nodes.
   assert.deepEqual(links, ["hypersnap", "val.two", "reader", "snapchain"], "hypersnap group first, snapchain below it; testnet nodes stay on their tab");
-  for (const l of links) assert.ok(html.includes(`<div class="col" id="node-${l}"`), `card for ${l} is on the page`);
+  for (const l of links) assert.ok(cards.includes(`<div class="col" id="node-${l}"`), `card for ${l} is on the Node cards tab`);
+  assert.ok(!html.includes('<div class="col'), "no card on the Mainnet tab");
   assert.match(index, /hypersnap <span class="muted">2 validators, 1 read node<\/span>/);
   assert.match(index, /<span class="iname">second<\/span>/, "the display name, not the label");
   assert.ok(!html.includes('id="pager"'), "no pager element, so the inline script does nothing and no card is hidden");

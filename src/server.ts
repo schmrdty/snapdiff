@@ -74,6 +74,18 @@ ${body}</div></div></div></section>`;
  */
 export const networkState = (total: number, down: number): "ok" | "warn" | "bad" =>
   total > 0 && down >= total ? "bad" : total > 0 && down / total >= 0.41 ? "warn" : "ok";
+/**
+ * One node's pill (Ryan, 2026-11-25): "down" only when /v1/info gives no usable answer;
+ * "degraded" when it answers but a shard is past BEHIND_BLOCK_DELAY or has an open stall
+ * (catching up after a restart, or stopped while its peers go on); "up" otherwise. Before
+ * this a node 12 h behind and catching up read "up", and the same node read "down" once it
+ * was slow to answer, so a catching-up node never read as what it was. Degraded counts as
+ * answering everywhere: the network badge, uptime, and the API window.
+ */
+export type NodeState = "no data" | "down" | "degraded" | "up";
+export const nodeState = (i: InfoSnapshot | null, behindBlockDelay: number, stalled = false): NodeState =>
+  i === null ? "no data" : !i.reachable ? "down" : stalled || (i.maxBlockDelay !== null && i.maxBlockDelay > behindBlockDelay) ? "degraded" : "up";
+const STATE_CLASS: Record<NodeState, string> = { "no data": "bad", down: "bad", degraded: "warn", up: "ok" };
 /** H for Hypersnap networks (testnet included), S for Snapchain. */
 const netLetter = (network: string): string => (network.includes("snapchain") ? "S" : "H");
 
@@ -157,11 +169,22 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     Object.fromEntries(await Promise.all(nodeLabels.map(async (l) => [l, await store.latestInfo(l)] as const)));
 
   app.get("/api/summary", async (c) => {
-    const [summary, info] = await Promise.all([store.summary(), latestInfos()]);
+    const [summary, info, open] = await Promise.all([store.summary(), latestInfos(), store.openStalls()]);
+    // meta[label]: what the page prints for each node, so the Telegram bot says the same thing
+    // (Ryan, 2026-11-25): the display name (NODE_<K>_NAME), the role, and the pill state
+    // (nodeState: up, degraded, down, or no data). Before this the bot called a node 16 h
+    // behind "up" while the page said "degraded", and used labels where the page shows names.
+    const meta = Object.fromEntries(
+      cfg.nodes.map((n) => {
+        const i = info[n.label] ?? null;
+        const stalled = i?.shards.some((x) => open.some((o) => o.side === n.label && o.shardId === x.shardId)) ?? false;
+        return [n.label, { name: label(n.label), validator: n.validator === true, reference: Object.values(cfg.references).includes(n.label), state: nodeState(i, cfg.behindBlockDelay, stalled) }] as const;
+      }),
+    );
     // versions[network]: newest version its reachable nodes report (src/versions.ts); the bot
     // compares info[label].version against it to say "behind". releases[network]: newest
     // version the project has published (src/releases.ts), the earlier signal; {} when off.
-    return c.json({ nodes: nodeLabels, networks: networkMap, reference: cfg.reference, references: cfg.references, summary, info, versions: latestVersions(networkMap, info), releases: releases?.() ?? {} });
+    return c.json({ nodes: nodeLabels, networks: networkMap, reference: cfg.reference, references: cfg.references, summary, info, meta, versions: latestVersions(networkMap, info), releases: releases?.() ?? {} });
   });
 
   app.get("/api/diffs", async (c) => {
@@ -216,6 +239,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     ]);
     const up = rows.filter((r) => r.reachable);
     const delays = up.map((r) => r.maxBlockDelay).filter((d): d is number => d !== null);
+    const openShards = new Set(stalls.filter((s) => s.endedAt === null).map((s) => s.shardId));
     return c.json({
       label,
       name: node.name ?? label,
@@ -226,6 +250,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       // Newest published version on this node's network (src/releases.ts), null when unknown or off.
       release: releases?.()[node.network] ?? null,
       mesh: meshOf(meshSnap(), label) ?? null,
+      state: nodeState(latest, cfg.behindBlockDelay, latest?.shards.some((s) => openShards.has(s.shardId)) ?? false),
       latest,
       window: {
         hours,
@@ -233,6 +258,8 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
         toMs: now,
         samples: rows.length,
         up: up.length,
+        // Of the samples that answered, those past BEHIND_BLOCK_DELAY (catching up or stalled).
+        degraded: up.filter((r) => r.maxBlockDelay !== null && r.maxBlockDelay > cfg.behindBlockDelay).length,
         down: rows.length - up.length,
         uptimePct: rows.length > 0 ? Math.round((up.length / rows.length) * 1000) / 10 : null,
         worstDelay: delays.length > 0 ? Math.max(...delays) : null,
@@ -285,8 +312,14 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     // tab because the relay compares the two mainnets. Tabs are plain links, not script: the
     // Caddy CSP pins the page's single inline script by hash (test/csp.test.ts). Ryan,
     // 2026-11-17: testnet cards inside the mainnet overview were confusing.
-    const view: "mainnet" | "testnet" = hasTestnet && c.req.query("net") === "testnet" ? "testnet" : "mainnet";
+    // A third view, /?view=cards (Ryan, 2026-11-25): every mainnet node card on its own tab,
+    // grouped by chain, filtered by ?chain=<network> (anything else shows every chain). The
+    // filter is plain links like the tabs, so it survives the 30 s reload and can be shared.
+    // The Mainnet tab keeps the index; its rows link here.
+    const view: "mainnet" | "testnet" | "cards" =
+      c.req.query("view") === "cards" ? "cards" : hasTestnet && c.req.query("net") === "testnet" ? "testnet" : "mainnet";
     const nets = allNets.filter((n) => isTestnet(n.network) === (view === "testnet"));
+    const chain = view === "cards" && nets.some((n) => n.network === c.req.query("chain")) ? (c.req.query("chain") as string) : null;
     const nodeLabels = nets.flatMap((n) => n.labels);
     const inView = new Set<Side>(nodeLabels);
     const [summary, infos, unexplained, pending, recentStalls, openStalls] = await Promise.all([
@@ -300,6 +333,8 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     // Newest 2000 plus anything still open beyond them, each once, newest first.
     const stalls = [...recentStalls, ...openStalls.filter((o) => !recentStalls.some((r) => r.id === o.id))].filter((s) => inView.has(s.side)).sort((a, b) => b.startedAt - a.startedAt);
     const openStall = (side: Side, shardId: number) => stalls.some((s) => s.side === side && s.shardId === shardId && s.endedAt === null);
+    const stateOf = (side: Side, i: InfoSnapshot | null): NodeState => nodeState(i, cfg.behindBlockDelay, i?.shards.some((x) => openStall(side, x.shardId)) ?? false);
+    const behindSec = cfg.behindBlockDelay;
     // The header pill counts the open stalls of this tab's nodes only. summary.openStalls is
     // database-wide, so the Testnet tab was showing mainnet stalls in red (Ryan's screenshot,
     // 2026-11-19).
@@ -326,8 +361,8 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     };
 
     const nodeCard = (side: Side, i: InfoSnapshot | null, extra: boolean) => {
-      const status = i === null ? "no data" : i.reachable ? "up" : "down";
-      const cls = i?.reachable ? "ok" : "bad";
+      const status = stateOf(side, i);
+      const cls = STATE_CLASS[status];
       // Version line: "v0.17.4" plus a red "behind 0.17.5" pill when a reachable node on the
       // same network runs something newer (src/versions.ts). Omitted when the node reports none.
       const ver = versionView(i?.version, latestByNet[nodeOf(cfg, side)?.network ?? ""] ?? null);
@@ -348,13 +383,15 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
           .sort((x, y) => x.shardId - y.shardId)
           .map(
             (s) =>
-              `<tr><td>${s.shardId}${openStall(side, s.shardId) ? ` <span class="pill bad">stalled</span>` : ""}</td><td>${s.maxHeight.toLocaleString()}</td><td>${s.blockDelay}</td></tr>`,
+              `<tr><td>${s.shardId}${openStall(side, s.shardId) ? ` <span class="pill bad">stalled</span>` : s.blockDelay > behindSec ? ` <span class="pill warn">behind</span>` : ""}</td><td>${s.maxHeight.toLocaleString()}</td><td title="${s.blockDelay} s">${fmtDelay(s.blockDelay)}</td></tr>`,
           )
           .join("") ?? "";
       // Host on its own line, never wrapped: a long host is cut with an ellipsis (full text in
       // the title) instead of breaking mid-word, and "checked" sits on the next line so every
       // card has the same shape. Ryan, 2026-11-11: a wrapped host pushed the dot onto line two.
       const host = `${i?.provider ?? (nodeOf(cfg, side)?.private ? side : hostOf(nodeOf(cfg, side)?.url ?? ""))}${(nodeOf(cfg, side)?.providers.length ?? 1) > 1 ? ` (${nodeOf(cfg, side)?.providers.length} providers)` : ""}`;
+      // A card does not fold on its own; only the chain group around it does (Ryan, 2026-11-25:
+      // per-card arrows were not what he asked for and were removed the same day).
       return `<div class="col" id="node-${esc(side)}" data-net="${esc(nodeOf(cfg, side)?.network ?? "")}"${extra ? " data-extra" : " data-pin"}>${headTile(side)}<section class="card">
         <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span></h2>
         <p class="muted host" title="${esc(host)}">${esc(host)}</p>
@@ -362,9 +399,10 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
         ${verLine}
         ${meshLines(side)}
         ${i?.note ? `<p class="warn">${esc(i.note)}</p>` : ""}
-        ${i?.error ? `<p class="bad-text">Not answering: ${esc(i.error)}. Other nodes still are; nothing is lost, this one just cannot be compared until it is back.</p>` : ""}
+        ${status === "degraded" && i ? `<p class="warn">${(i.maxBlockDelay ?? 0) > behindSec ? `${fmtDelay(i.maxBlockDelay ?? 0)} behind` : "Shard stalled"}</p>` : ""}
+        ${i?.error ? `<p class="bad-text">${esc(i.error)}</p>` : ""}
         ${shards ? `<table><thead><tr><th>Shard</th><th>Height</th><th>Block delay</th></tr></thead><tbody>${shards}</tbody></table>` : ""}
-        <p class="muted back"><a href="#index">all nodes</a></p>
+        <p class="muted back"><a href="${view === "cards" ? "/#index" : "#index"}">all nodes</a></p>
       </section></div>`;
     };
 
@@ -389,14 +427,39 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
             : i.shards
                 .slice()
                 .sort((x, y) => x.shardId - y.shardId)
-                .map((x) => `<span class="sh${openStall(side, x.shardId) ? " bad" : ""}" title="shard ${x.shardId}: height ${x.maxHeight.toLocaleString("en-US")}, block delay ${x.blockDelay} s${openStall(side, x.shardId) ? ", stalled" : ""}"><i>${x.shardId}</i>${fmtDelay(x.blockDelay)}</span>`)
+                .map((x) => `<span class="sh${openStall(side, x.shardId) ? " bad" : x.blockDelay > behindSec ? " warn" : ""}" title="shard ${x.shardId}: height ${x.maxHeight.toLocaleString("en-US")}, block delay ${x.blockDelay} s${openStall(side, x.shardId) ? ", stalled" : x.blockDelay > behindSec ? ", behind" : ""}"><i>${x.shardId}</i>${fmtDelay(x.blockDelay)}</span>`)
                 .join("");
-      return `<a class="irow" href="#node-${esc(encodeURIComponent(side))}"><span class="iname">${esc(label(side))}</span><span class="pill ${i?.reachable ? "ok" : "bad"}">${i === null ? "no data" : i.reachable ? "up" : "down"}</span><span class="iver${ver.behind ? " bad" : ""}"${ver.behind ? ` title="behind ${esc(ver.latest ?? "")}"` : ""}>${ver.current ? `v${esc(ver.current)}` : ""}</span><span class="irole">${role}</span><span class="ish">${shardCells}</span></a>`;
+      return `<a class="irow" href="${view === "mainnet" ? "/?view=cards" : ""}#node-${esc(encodeURIComponent(side))}"><span class="iname">${esc(label(side))}</span><span class="pill ${STATE_CLASS[stateOf(side, i)]}">${stateOf(side, i)}</span><span class="iver${ver.behind ? " bad" : ""}"${ver.behind ? ` title="behind ${esc(ver.latest ?? "")}"` : ""}>${ver.current ? `v${esc(ver.current)}` : ""}</span><span class="irole">${role}</span><span class="ish">${shardCells}</span></a>`;
     };
     // Each network is a group that folds on its own to one line: the letter badge (H or S,
     // colored by networkState) and the network name. Snapchain sorts below every other network
     // (Ryan, 2026-11-24); the rest keep config order.
     const indexNets = [...nets].sort((a, b) => Number(a.network.includes("snapchain")) - Number(b.network.includes("snapchain")));
+    // One order for a network's nodes everywhere (index rows and cards): the reference first,
+    // then validators, then read nodes, each in config order.
+    const orderNet = (labels: Side[]): Side[] => {
+      const refs = labels.filter((l) => Object.values(cfg.references).includes(l));
+      const vals = labels.filter((l) => !refs.includes(l) && nodeOf(cfg, l)?.validator);
+      const readers = labels.filter((l) => !refs.includes(l) && !nodeOf(cfg, l)?.validator);
+      return [...refs, ...vals, ...readers];
+    };
+    const netBadge = (network: string, labels: Side[]): string => {
+      const down = labels.filter((l) => infos[l]?.reachable !== true).length;
+      const degraded = labels.filter((l) => stateOf(l, infos[l] ?? null) === "degraded").length;
+      const stateText = `${network}: ${labels.length - down} of ${labels.length} node${labels.length === 1 ? "" : "s"} answering${degraded > 0 ? `, ${degraded} of them degraded (behind or stalled)` : ""}. Green while under 41% are down, yellow at 41% or more, red when none answer.`;
+      return `<span class="nb ${networkState(labels.length, down)}" role="img" aria-label="${esc(stateText)}" title="${esc(stateText)}">${netLetter(network)}</span>`;
+    };
+    // Node cards grouped by chain in the same order as the index (Hypersnap above Snapchain),
+    // each group folding on its own to its badge and name. Ryan, 2026-11-25: the cards mixed
+    // the two chains in config order.
+    const cardGroups = (): string =>
+      indexNets
+        .filter((n) => chain === null || n.network === chain)
+        .map(({ network, labels }) => {
+          const gid = `cards-${network}`;
+          return `<div class="grp fold-box cgrp" id="${esc(gid)}" data-name="${esc(network)} cards"><div class="grp-head">${netBadge(network, labels)}<h3>${esc(network)} <span class="muted">${labels.length} card${labels.length === 1 ? "" : "s"}</span></h3>${foldBtn(gid, `${network} cards`)}</div><div class="sec-body" id="${esc(gid)}-body"><div class="sec-in"><div class="grid nodes">${orderNet(labels).map((l) => nodeCard(l, infos[l] ?? null, extraSet.has(l))).join("")}</div></div></div></div>`;
+        })
+        .join("");
     const indexHtml = (): string =>
       sec(
         "index",
@@ -405,16 +468,10 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
         `<p class="muted">Tap a node to view its card.</p>
 ${indexNets
   .map(({ network, labels }) => {
-    const refs = labels.filter((l) => Object.values(cfg.references).includes(l));
-    const vals = labels.filter((l) => !refs.includes(l) && nodeOf(cfg, l)?.validator);
-    const readers = labels.filter((l) => !refs.includes(l) && !nodeOf(cfg, l)?.validator);
     const nVal = labels.filter((l) => nodeOf(cfg, l)?.validator).length;
-    const down = labels.filter((l) => infos[l]?.reachable !== true).length;
-    const state = networkState(labels.length, down);
-    const stateText = `${network}: ${labels.length - down} of ${labels.length} node${labels.length === 1 ? "" : "s"} answering. Green while under 41% are down, yellow at 41% or more, red when none answer.`;
     const gid = `grp-${network}`;
-    return `<div class="grp fold-box" id="${esc(gid)}" data-name="${esc(network)}"><div class="grp-head"><span class="nb ${state}" role="img" aria-label="${esc(stateText)}" title="${esc(stateText)}">${netLetter(network)}</span><h3>${esc(network)} <span class="muted">${nVal} validator${nVal === 1 ? "" : "s"}, ${labels.length - nVal} read node${labels.length - nVal === 1 ? "" : "s"}</span></h3>${foldBtn(gid, network)}</div><div class="sec-body" id="${esc(gid)}-body"><div class="sec-in">
-<div class="irows">${[...refs, ...vals, ...readers].map(indexRow).join("")}</div></div></div></div>`;
+    return `<div class="grp fold-box" id="${esc(gid)}" data-name="${esc(network)}"><div class="grp-head">${netBadge(network, labels)}<h3>${esc(network)} <span class="muted">${nVal} validator${nVal === 1 ? "" : "s"}, ${labels.length - nVal} read node${labels.length - nVal === 1 ? "" : "s"}</span></h3>${foldBtn(gid, network)}</div><div class="sec-body" id="${esc(gid)}-body"><div class="sec-in">
+<div class="irows">${orderNet(labels).map(indexRow).join("")}</div></div></div></div>`;
   })
   .join("")}`,
       );
@@ -426,6 +483,10 @@ ${indexNets
     // Node cards: the first configured node of every network is pinned on the left
     // (with two networks that is the reference and its first peer); any further
     // nodes share the remaining slots and page with the arrows. Pure presentation.
+    const chainFilter = (): string =>
+      `<nav class="jump seg" aria-label="Chain">${indexNets
+        .map(({ network }) => `<a href="/?view=cards&amp;chain=${esc(encodeURIComponent(network))}"${chain === network ? ' class="on" aria-current="page"' : ""}>${esc(network.charAt(0).toUpperCase() + network.slice(1))} only</a>`)
+        .join("")}<a href="/?view=cards"${chain === null ? ' class="on" aria-current="page"' : ""}>Both</a></nav>`;
     const pinnedLabels = nets.map((n) => n.labels[0]).filter((l): l is Side => l !== undefined);
     const extraLabels = nodeLabels.filter((l) => !pinnedLabels.includes(l));
     const extraSet = new Set(extraLabels);
@@ -548,6 +609,10 @@ ${rows === "" ? `<p class="muted">No casts yet. Register an account and post one
         })
         .join("");
 
+    // Page order below the jump links (Ryan, 2026-11-25): one "Node info" card (id nodeinfo) around
+    // every node-health card (index, the testnet's cards, consensus, stalls), each still folding on
+    // its own, so folding Node info leaves Clients as the next open card. The split table counts
+    // diffs, so it sits with the diff sections after Clients.
     const splitHtml = () => sec("split", "Network split", "Network split", `<p class="muted">A cast missing on every node of a network is a disagreement between the networks (scope "network"). A cast missing on one node while another node on its network has it is that node's problem (scope "node"). Unexplained by scope: node ${summary.byScope.node}, network ${summary.byScope.network}. Judged when each row is first seen, from the nodes that answered.</p>
 <div class="scroll"><table><thead><tr><th>Network</th><th>Nodes</th><th>Casts missing on all its nodes: unexplained</th><th>pending</th></tr></thead><tbody>
 ${nets
@@ -604,8 +669,8 @@ ${nets
     return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30">
 <title>snapdiff</title>
-<meta name="fc:miniapp" content="${esc(embedJson(cfg, originOf(c), view === "testnet" ? "/?net=testnet" : "/"))}">
-<meta name="fc:frame" content="${esc(embedJson(cfg, originOf(c), view === "testnet" ? "/?net=testnet" : "/"))}">
+<meta name="fc:miniapp" content="${esc(embedJson(cfg, originOf(c), view === "testnet" ? "/?net=testnet" : view === "cards" ? "/?view=cards" : "/"))}">
+<meta name="fc:frame" content="${esc(embedJson(cfg, originOf(c), view === "testnet" ? "/?net=testnet" : view === "cards" ? "/?view=cards" : "/"))}">
 <meta property="og:title" content="${esc(cfg.miniapp.name)}"><meta property="og:description" content="Snapchain and Hypersnap node health"><meta property="og:image" content="${esc(originOf(c))}/static/embed.png">
 <script type="module" src="/static/miniapp.mjs"></script>
 <script src="/static/fold.js"></script>
@@ -644,8 +709,11 @@ td.text.pre{white-space:pre;font:12px/1.15 ui-monospace,SFMono-Regular,Menlo,Con
 .irows{display:grid}.irow,.irow:visited{display:grid;grid-template-columns:minmax(96px,1.3fr) 60px 82px minmax(120px,1fr) minmax(170px,1.5fr);gap:2px 10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--line);text-decoration:none;color:var(--fg);font-size:14px}
 .irow:hover{background:color-mix(in srgb,var(--line) 45%,transparent)}.iname{font-weight:600;color:var(--link);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.irow .pill{justify-self:start}
 .iver,.irole{color:var(--muted);font-size:13px;white-space:nowrap}.iver.bad{color:var(--bad)}.ish{display:flex;gap:6px;justify-content:flex-end;font-variant-numeric:tabular-nums}
-.sh{border:1px solid var(--line);border-radius:6px;padding:0 6px;font-size:13px;white-space:nowrap}.sh i{font-style:normal;color:var(--muted);margin-right:4px;font-size:11px}.sh.bad{border-color:var(--bad)}
+.sh{border:1px solid var(--line);border-radius:6px;padding:0 6px;font-size:13px;white-space:nowrap}.sh i{font-style:normal;color:var(--muted);margin-right:4px;font-size:11px}.sh.bad{border-color:var(--bad)}.sh.warn{border-color:var(--warn)}
 .back{margin:8px 0 0;font-size:13px}
+/* Node card shard table: tighter cells so three columns fit the 225 px inside a card at the
+   1100 px page width (Ryan, 2026-11-25: text ran past the card's right edge on desktop). */
+.col .card th,.col .card td{padding:6px 4px;font-variant-numeric:tabular-nums}.col .card th:first-child,.col .card td:first-child{padding-left:0}.col .card th:last-child,.col .card td:last-child{padding-right:0;text-align:right}
 /* Collapsible cards (static/fold.js). The arrow sits at the right edge of each heading line; a folded
    card is that line only, and the cards below move up. Nothing overflows a folded card: its body
    collapses to zero rows inside overflow:hidden. Without the script the arrows stay hidden and
@@ -662,7 +730,8 @@ td.text.pre{white-space:pre;font:12px/1.15 ui-monospace,SFMono-Regular,Menlo,Con
 .grp{border:1px solid var(--line);border-radius:8px;margin:10px 0 0}.grp-head{display:flex;align-items:center;gap:8px;min-height:40px;padding:3px 4px 3px 10px}
 .fold-js .grp .fold{width:30px;height:30px}.grp .irows{padding:0 10px 6px}.grp.shut .grp-head h3 .muted{display:none}
 .nb{flex:none;display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;font:700 13px/1 system-ui,sans-serif}
-.nb.ok{background:var(--ok);color:var(--card)}.nb.warn{background:var(--warn);color:var(--card)}.nb.bad{background:var(--bad);color:var(--card)}
+.seg a.on{color:#fff;background:var(--fc);border-color:var(--fc)}
+#nodeinfo>.sec-body .sec{background:var(--bg)}#nodeinfo>.sec-body .sec:last-child{margin-bottom:0}.cgrp .grid.nodes{margin:0;padding:4px 10px 10px}.nb.ok{background:var(--ok);color:var(--card)}.nb.warn{background:var(--warn);color:var(--card)}.nb.bad{background:var(--bad);color:var(--card)}
 /* Cause tiles: the explanation is a hover or focus tooltip. The open causes card lets it overflow
    its body; while the card moves, the body clips again (.moving, set by the script). */
 .stat{position:relative}.stat:focus-visible{outline:2px solid var(--link);outline-offset:2px}
@@ -683,21 +752,24 @@ td.text.pre{white-space:pre;font:12px/1.15 ui-monospace,SFMono-Regular,Menlo,Con
 .pager button{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:2px 10px;font:inherit;cursor:pointer}
 .pager button:disabled{opacity:.4;cursor:default}
 </style></head><body><main>
-<h1>snapdiff${view === "testnet" ? " testnet" : ""}: ${nets.map(({ network, labels }) => `${esc(network)} (${labels.length} node${labels.length === 1 ? "" : "s"})`).join(" vs ")}</h1>
-${
+<h1>snapdiff${view === "testnet" ? " testnet" : view === "cards" ? " node cards" : ""}: ${(view === "cards" ? indexNets : nets).map(({ network, labels }) => `${esc(network)} (${labels.length} node${labels.length === 1 ? "" : "s"})`).join(view === "cards" ? " and " : " vs ")}</h1>
+<nav class="tabs"><a class="tab${view === "mainnet" ? " on" : ""}" href="/">Mainnet (${allNets.filter((n) => !isTestnet(n.network)).reduce((t, n) => t + n.labels.length, 0)} nodes)</a><a class="tab${view === "cards" ? " on" : ""}" href="/?view=cards">Node cards</a>${
   hasTestnet
-    ? `<nav class="tabs"><a class="tab${view === "mainnet" ? " on" : ""}" href="/">Mainnet (${allNets.filter((n) => !isTestnet(n.network)).reduce((t, n) => t + n.labels.length, 0)} nodes)</a><a class="tab tn${view === "testnet" ? " on" : ""}" href="/?net=testnet">Testnet (${allNets.filter((n) => isTestnet(n.network)).reduce((t, n) => t + n.labels.length, 0)} nodes)</a></nav>`
+    ? `<a class="tab tn${view === "testnet" ? " on" : ""}" href="/?net=testnet">Testnet (${allNets.filter((n) => isTestnet(n.network)).reduce((t, n) => t + n.labels.length, 0)} nodes)</a>`
     : ""
-}
+}</nav>
 ${
-  view === "mainnet"
+  view === "cards"
+    ? `<p class="muted">Every mainnet node's card, grouped by chain. Show one chain or both. This page reloads every 30 s. Read-only.</p>
+${chainFilter()}
+${cardGroups()}`
+    : view === "mainnet"
     ? `<p class="muted">Scans run every ${Math.round(cfg.scanIntervalMs / 60000)} min: ${summary.scans} so far, last ${ago(summary.lastScanAt, now)}, next in about ${nextScanIn(summary.lastScanAt, cfg.scanIntervalMs, now)}. This page reloads every 30 s. Read-only.</p>
 ${causesHtml()}`
     : `<p class="muted">Node health and shard stalls for the testnet. The cast relay comparison on the Mainnet tab does not apply here. This page reloads every 30 s. Read-only.</p>`
 }
-<nav class="jump" aria-label="Sections"><a href="#index">Nodes</a><a href="#nodes">Cards</a>${consensusHtml(nets.map((n) => n.network)) ? `<a href="#consensus">Consensus</a>` : ""}${(clients?.() ?? []).some((h) => isTestnet(h.network) === (view === "testnet")) ? `<a href="#clients">Clients</a>` : ""}<a href="#stalls">Stalls</a></nav>
-${indexHtml()}
-${sec("nodes", "Cards", "Cards", `<div class="grid nodes">${[...pinnedLabels, ...extraLabels].map((l) => nodeCard(l, infos[l] ?? null, extraSet.has(l))).join("")}</div>`)}
+${view === "cards" ? "" : `<nav class="jump" aria-label="Sections"><a href="#index">Nodes</a>${view === "testnet" ? `<a href="#nodes">Cards</a>` : ""}${consensusHtml(nets.map((n) => n.network)) ? `<a href="#consensus">Consensus</a>` : ""}<a href="#stalls">Stalls</a>${(clients?.() ?? []).some((h) => isTestnet(h.network) === (view === "testnet")) ? `<a href="#clients">Clients</a>` : ""}</nav>
+`}
 <script>
 (function(){
   var g=document.getElementById('nodes'),pager=document.getElementById('pager');if(!g||!pager)return;
@@ -718,17 +790,24 @@ ${sec("nodes", "Cards", "Cards", `<div class="grid nodes">${[...pinnedLabels, ..
   addEventListener('resize',render);render();
 })();
 </script>
+${view === "cards" ? "" : `${sec(
+  "nodeinfo",
+  "Node info",
+  "Node info",
+  `${indexHtml()}
+${view === "testnet" ? sec("nodes", "Cards", "Cards", cardGroups()) : ""}
+${consensusHtml(nets.map((n) => n.network))}
+${sec("stalls", "Shard stalls", `Shard stalls${openInView > 0 ? ` <span class="pill bad">${openInView} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}`, `<p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer on the same network kept going. When every reachable node of a network is stalled on a shard the rows are marked network-wide: that network stopped deciding blocks. Diffs on a stalled shard stay pending until it recovers. One line per node and shard with its latest stall; the last column counts the past 7 days; a line with several stalls opens on click.</p>${stallsHtml(stalls)}`)}`,
+)}
+${clientsHtml((clients?.() ?? []).filter((h) => isTestnet(h.network) === (view === "testnet")))}
 ${view === "testnet" ? feedHtml() : ""}
 ${view === "mainnet" ? splitHtml() : ""}
-${consensusHtml(nets.map((n) => n.network))}
-${clientsHtml((clients?.() ?? []).filter((h) => isTestnet(h.network) === (view === "testnet")))}
-${sec("stalls", "Shard stalls", `Shard stalls${openInView > 0 ? ` <span class="pill bad">${openInView} ongoing</span>` : ""}${networkWideStalls(stalls).map((t) => ` <span class="pill bad">network-wide: ${esc(t)}</span>`).join("")}`, `<p class="muted">A shard on one node stopped advancing while the same shard on its healthiest peer on the same network kept going. When every reachable node of a network is stalled on a shard the rows are marked network-wide: that network stopped deciding blocks. Diffs on a stalled shard stay pending until it recovers. One line per node and shard with its latest stall; the last column counts the past 7 days; a line with several stalls opens on click.</p>${stallsHtml(stalls)}`)}
 ${
   view === "mainnet"
     ? `${sec("unexplained", "Unexplained", "Unexplained", `<p class="muted">${nodeLabels.map((l) => `Missing on ${esc(l)}: ${summary.byMissingNode[l] ?? 0}`).join(" · ")}. Rows are rechecked for ${Math.round(cfg.recheckWindowMs / 3600000)} h; one that turns up on the missing side moves to sync lag and leaves this list.</p>${rowsHtml(unexplained, summary.byCause.unexplained)}`)}
 ${sec("pending", "Pending", "Pending", `<p class="muted">Seen on one side, not yet old enough or not yet rechecked. Most resolve on their own.</p>${rowsHtml(pending, summary.byCause.pending)}`)}`
     : ""
-}
+}`}
 </main></body></html>`);
   });
 

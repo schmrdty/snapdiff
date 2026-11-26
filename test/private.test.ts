@@ -56,7 +56,7 @@ test("dashboard: a private node's card shows its label where a public node's sho
   const node = (label: string, network: string, url: string, priv: boolean) => ({ label, url, network, headers: {}, providers: [{ url, headers: {} }], ...(priv ? { private: true } : {}) });
   const cfg = { ...loadConfig(), nodes: [node("snapchain", "snapchain", "https://sc.example", false), node("hypersnape.node", "hypersnap", `http://${IP}:3381`, true)], reference: "snapchain" };
   const store = new SqliteStore(":memory:");
-  const html = await (await buildApp(cfg, store).request("http://x/")).text();
+  const html = await (await buildApp(cfg, store).request("http://x/?view=cards")).text();
   const llms = await (await buildApp(cfg, store).request("http://x/llms.txt")).text();
   await store.close();
   assert.match(html, /sc\.example/);

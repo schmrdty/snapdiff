@@ -20,7 +20,7 @@ test("header tiles: validator replaces node, and follows reference, when NODE_<L
   };
   const store = new SqliteStore(":memory:");
   const app = buildApp(cfg, store);
-  const html = await (await app.request("http://x/")).text();
+  const html = (await (await app.request("http://x/")).text()) + (await (await app.request("http://x/?view=cards")).text());
   const view = (await (await app.request("http://x/api/node/castrater")).json()) as { validator: boolean };
   const ro = (await (await app.request("http://x/api/node/ohsnap")).json()) as { validator: boolean };
   await store.close();
@@ -41,7 +41,7 @@ test("dashboard: names replace labels on cards and in the split table; reference
   };
   const store = new SqliteStore(":memory:");
   const app = buildApp(cfg, store);
-  const html = await (await app.request("http://x/")).text();
+  const html = (await (await app.request("http://x/")).text()) + (await (await app.request("http://x/?view=cards")).text());
   const summary = (await (await app.request("http://x/api/summary")).json()) as { nodes: string[]; references: Record<string, string> };
   await store.close();
   assert.match(html, /<div class="col" id="node-[\w.-]+" data-net="snapchain" data-pin><div class="head ref">snapchain reference<\/div><section class="card">\s*<h2>snapchain <span class="pill bad">no data<\/span><\/h2>/);

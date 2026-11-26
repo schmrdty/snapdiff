@@ -9,10 +9,10 @@ export const COMMANDS = ['snapdiff', 'status', 'consensus', 'fid', 'node', 'subs
 // Telegram's own entry point and is left off the menu.
 export const COMMAND_MENU: { command: string; description: string }[] = [
   { command: 'snapdiff', description: 'networks up, worst delay, open diff counts; add "is X down" for one node or client' },
-  { command: 'status', description: 'every node and every watched client' },
+  { command: 'status', description: 'every node (up, degraded, or down) and every watched client' },
   { command: 'consensus', description: 'per shard, how many validators can vote against the quorum' },
   { command: 'fid', description: 'open diffs for one FID: /fid 123' },
-  { command: 'node', description: 'one node now and over 24 h: /node LABEL' },
+  { command: 'node', description: 'one node now and over 24 h: /node NAME' },
   { command: 'subscribe', description: 'node events by DM, private chat only: /subscribe LABEL' },
   { command: 'unsubscribe', description: 'stop following a node' },
   { command: 'feedback', description: 'a note to the operator' },

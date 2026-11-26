@@ -43,7 +43,7 @@ async function render(downSnap: string[]) {
 
 test("Nodes card: one foldable card holding a foldable group per network, hypersnap above snapchain, H and S badges", async () => {
   const { html } = await render(["ohsnap", "crackle", "snapchain"]);
-  const index = html.slice(html.indexOf('id="index"'), html.indexOf('id="nodes"'));
+  const index = html.slice(html.indexOf('id="index"'), html.indexOf('id="stalls"'));
   assert.match(html, /<section class="card sec fold-box" id="index" data-name="Nodes"><div class="sec-head"><h2>Nodes<\/h2><button class="fold"/);
   assert.ok(index.indexOf('id="grp-hypersnap"') < index.indexOf('id="grp-snapchain"'), "hypersnap group first");
   // hypersnap: 1 of 3 down (33%) is green; snapchain: 2 of 2 down is red.
@@ -60,7 +60,7 @@ test("Nodes badge turns yellow at 41% down", async () => {
 
 test("every section is a foldable card; still one inline script; fold.js is served", async () => {
   const { html, js } = await render([]);
-  for (const [id, title] of [["causes", "Diffs by cause"], ["index", "Nodes"], ["nodes", "Cards"], ["split", "Network split"], ["stalls", "Shard stalls"], ["unexplained", "Unexplained"], ["pending", "Pending"]] as const) {
+  for (const [id, title] of [["causes", "Diffs by cause"], ["nodeinfo", "Node info"], ["index", "Nodes"], ["split", "Network split"], ["stalls", "Shard stalls"], ["unexplained", "Unexplained"], ["pending", "Pending"]] as const) {
     assert.match(html, new RegExp(`<section class="card sec fold-box" id="${id}" data-name="${title}"><div class="sec-head"><h2>${title}`), `${id} is a foldable card`);
   }
   assert.equal((html.match(/<script>/g) ?? []).length, 1, "the hash-pinned pager script is the only inline script");
@@ -77,4 +77,57 @@ test("cause tiles: explanation is a hover tooltip; a chart view carries the same
   assert.match(html, /<button class="vt" type="button" aria-pressed="false">Chart<\/button>/);
   assert.match(html, /<div class="cchart" role="img" aria-label="Diffs by cause: unexplained 0, pending 0, relay filtered 0, version rule 0, sync lag 0">/);
   assert.equal((html.match(/<div class="crow" /g) ?? []).length, 5);
+});
+
+test("Node cards tab: hypersnap group above snapchain, the chain filter, and every card folds on its own", async () => {
+  const cfg = {
+    ...loadConfig(),
+    nodes: [node("snapchain", "snapchain"), node("crackle", "snapchain"), node("hypersnap", "hypersnap"), node("ohsnap", "hypersnap")],
+    reference: "snapchain",
+    references: { snapchain: "snapchain", hypersnap: "hypersnap" },
+  };
+  const store = new SqliteStore(":memory:");
+  for (const l of ["snapchain", "crackle", "hypersnap", "ohsnap"]) await store.recordInfo(snap(l, true));
+  const app = buildApp(cfg, store);
+  const both = await (await app.request("http://x/?view=cards")).text();
+  const sc = await (await app.request("http://x/?view=cards&chain=snapchain")).text();
+  const junk = await (await app.request("http://x/?view=cards&chain=nope")).text();
+  await store.close();
+  assert.match(both, /<h1>snapdiff node cards: hypersnap \(2 nodes\) and snapchain \(2 nodes\)<\/h1>/);
+  assert.match(both, /<a class="tab on" href="\/\?view=cards">Node cards<\/a>/);
+  assert.ok(both.indexOf('id="cards-hypersnap"') < both.indexOf('id="cards-snapchain"'), "hypersnap cards first");
+  assert.match(both, /<nav class="jump seg" aria-label="Chain"><a href="\/\?view=cards&amp;chain=hypersnap">Hypersnap only<\/a><a href="\/\?view=cards&amp;chain=snapchain">Snapchain only<\/a><a href="\/\?view=cards" class="on" aria-current="page">Both<\/a><\/nav>/);
+  assert.match(both, /<div class="col" id="node-ohsnap"[^>]*><div class="head">hypersnap node<\/div><section class="card">\s*<h2>ohsnap <span class="pill ok">up<\/span><\/h2>/, "a card has no arrow of its own");
+  assert.ok(!both.includes('aria-controls="node-'), "no per-card fold (Ryan, 2026-11-25)");
+  assert.match(both, /aria-controls="cards-hypersnap-body"/, "the chain group still folds");
+  assert.match(both, /<a href="\/#index">all nodes<\/a>/, "back to the index on the Mainnet tab");
+  assert.ok(!sc.includes('id="cards-hypersnap"') && sc.includes('id="cards-snapchain"'), "Snapchain only");
+  assert.match(sc, /<a href="\/\?view=cards&amp;chain=snapchain" class="on" aria-current="page">Snapchain only<\/a>/);
+  assert.ok(junk.includes('id="cards-hypersnap"') && junk.includes('id="cards-snapchain"'), "an unknown chain shows both");
+  for (const h of [both, sc]) {
+    assert.equal((h.match(/<script>/g) ?? []).length, 1, "still one inline script");
+    assert.ok(!h.includes('id="index"') && !h.includes('id="stalls"'), "the tab holds cards only");
+  }
+});
+
+test("Node info wraps the node-health cards; Clients is the next card after it", async () => {
+  const { html: plain } = await render([]);
+  const health = [{ label: "X", network: "snapchain" as const, siteUrl: "https://x.test", siteHost: "x.test", healthUrl: null, status: "unknown" as const, httpStatus: null, latencyMs: null, checkedAt: null, note: "" }];
+  const store = new SqliteStore(":memory:");
+  const cfg = { ...loadConfig(), nodes: [node("snapchain", "snapchain"), node("hypersnap", "hypersnap")], reference: "snapchain", references: { snapchain: "snapchain", hypersnap: "hypersnap" } };
+  const html = await (await buildApp(cfg as never, store, () => health as never).request("http://x/")).text();
+  await store.close();
+  assert.ok(!plain.includes('id="clients"'), "no Clients card without client checks");
+  const infoEnd = html.indexOf('id="clients"');
+  assert.ok(infoEnd > html.indexOf('id="stalls"'), "Clients comes after the last Node info card");
+  assert.ok(infoEnd < html.indexOf('id="split"'), "and before the diff sections");
+  const info = html.indexOf('<section class="card sec fold-box" id="nodeinfo" data-name="Node info">');
+  assert.ok(info > 0, "Node info card");
+  const end = html.indexOf('id="split"');
+  for (const id of ["index", "stalls"]) {
+    const at = html.indexOf(`id="${id}"`);
+    assert.ok(at > info && at < end, `${id} sits inside Node info`);
+  }
+  assert.ok(html.indexOf('id="split"') < html.indexOf('id="unexplained"'), "split stays with the diff sections");
+  assert.match(html, /<nav class="jump" aria-label="Sections"><a href="#index">Nodes<\/a>(<a href="#consensus">Consensus<\/a>)?<a href="#stalls">Stalls<\/a>/, "no Cards link on the Mainnet tab");
 });
