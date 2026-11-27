@@ -1,4 +1,4 @@
-// Collapsible cards, the Nodes card's network groups, and the cause tiles (Ryan, 2026-11-24).
+// Collapsible cards, the Nodes card's network groups, and the cause tiles (operator, 2026-11-24).
 // The page must keep exactly one inline script (its hash is pinned in deploy/Caddyfile); the
 // folding lives in /static/fold.js, which the CSP allows as 'self'.
 import { test } from "node:test";
@@ -93,16 +93,16 @@ test("Node cards tab: hypersnap group above snapchain, the chain filter, and eve
   const sc = await (await app.request("http://x/?view=cards&chain=snapchain")).text();
   const junk = await (await app.request("http://x/?view=cards&chain=nope")).text();
   await store.close();
-  assert.match(both, /<h1>snapdiff node cards: hypersnap \(2 nodes\) and snapchain \(2 nodes\)<\/h1>/);
-  assert.match(both, /<a class="tab on" href="\/\?view=cards">Node cards<\/a>/);
+  assert.match(both, /<h1 class="brand">Snapdiff<\/h1>/, "the title is the wordmark only; the tab says which view this is");
+  assert.match(both, /<a class="tab hue c-blue on" href="\/\?view=cards">Node cards<\/a>/);
   assert.ok(both.indexOf('id="cards-hypersnap"') < both.indexOf('id="cards-snapchain"'), "hypersnap cards first");
-  assert.match(both, /<nav class="jump seg" aria-label="Chain"><a href="\/\?view=cards&amp;chain=hypersnap">Hypersnap only<\/a><a href="\/\?view=cards&amp;chain=snapchain">Snapchain only<\/a><a href="\/\?view=cards" class="on" aria-current="page">Both<\/a><\/nav>/);
-  assert.match(both, /<div class="col" id="node-ohsnap"[^>]*><div class="head">hypersnap node<\/div><section class="card">\s*<h2>ohsnap <span class="pill ok">up<\/span><\/h2>/, "a card has no arrow of its own");
-  assert.ok(!both.includes('aria-controls="node-'), "no per-card fold (Ryan, 2026-11-25)");
+  assert.match(both, /<nav class="jump seg" aria-label="Chain"><a class="hue c-purple" href="\/\?view=cards&amp;chain=hypersnap">Hypersnap only<\/a><a class="hue c-teal" href="\/\?view=cards&amp;chain=snapchain">Snapchain only<\/a><a class="hue c-blue on" aria-current="page" href="\/\?view=cards">Both<\/a><\/nav>/);
+  assert.match(both, /<div class="col" id="node-ohsnap"[^>]*><div class="head">node<\/div><section class="card">\s*<h2>ohsnap <span class="pill ok">up<\/span><\/h2>/, "a card has no arrow of its own");
+  assert.ok(!both.includes('aria-controls="node-'), "no per-card fold (operator, 2026-11-25)");
   assert.match(both, /aria-controls="cards-hypersnap-body"/, "the chain group still folds");
   assert.match(both, /<a href="\/#index">all nodes<\/a>/, "back to the index on the Mainnet tab");
   assert.ok(!sc.includes('id="cards-hypersnap"') && sc.includes('id="cards-snapchain"'), "Snapchain only");
-  assert.match(sc, /<a href="\/\?view=cards&amp;chain=snapchain" class="on" aria-current="page">Snapchain only<\/a>/);
+  assert.match(sc, /<a class="hue c-teal on" aria-current="page" href="\/\?view=cards&amp;chain=snapchain">Snapchain only<\/a>/);
   assert.ok(junk.includes('id="cards-hypersnap"') && junk.includes('id="cards-snapchain"'), "an unknown chain shows both");
   for (const h of [both, sc]) {
     assert.equal((h.match(/<script>/g) ?? []).length, 1, "still one inline script");
@@ -129,5 +129,6 @@ test("Node info wraps the node-health cards; Clients is the next card after it",
     assert.ok(at > info && at < end, `${id} sits inside Node info`);
   }
   assert.ok(html.indexOf('id="split"') < html.indexOf('id="unexplained"'), "split stays with the diff sections");
-  assert.match(html, /<nav class="jump" aria-label="Sections"><a href="#index">Nodes<\/a>(<a href="#consensus">Consensus<\/a>)?<a href="#stalls">Stalls<\/a>/, "no Cards link on the Mainnet tab");
+  assert.match(html, /<nav class="jump" aria-label="Sections"><a class="hue c-orange" href="#clients">Clients<\/a>(<a class="hue c-teal" href="#consensus">Consensus<\/a>)?<a class="hue c-pink" href="#stalls">Stalls<\/a><\/nav>/, "Clients, Consensus, Stalls; no Cards link on the Mainnet tab");
+  assert.ok(!html.includes('href="#index"'), "no Nodes jump link: the Nodes card sits right under the nav (operator, 2026-11-26)");
 });

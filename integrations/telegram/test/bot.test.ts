@@ -140,7 +140,7 @@ test('feedback: slash form anywhere, prose form only when addressed, capped, fil
   assert.equal(match({ ...base, privateChat: true, text: 'feedback: in a DM' })?.feedback, 'in a DM');
   assert.equal(match({ ...base, text: '/feedback ' + 'x'.repeat(2000) })?.feedback?.length, FEEDBACK_MAX);
   const file = join(mkdtempSync(join(tmpdir(), 'snapdiff-fb-')), 'feedback.jsonl');
-  recordFeedback(file, { at: '2026-11-03T00:00:00.000Z', userId: 7, username: 'ryan', chatType: 'private', text: 'line one\nline two' });
+  recordFeedback(file, { at: '2026-11-03T00:00:00.000Z', userId: 7, username: 'tester', chatType: 'private', text: 'line one\nline two' });
   recordFeedback(file, { at: '2026-11-03T00:01:00.000Z', userId: 8, username: null, chatType: 'supergroup', text: 'y'.repeat(2000) });
   const lines = readFileSync(file, 'utf8').trimEnd().split('\n').map(l => JSON.parse(l));
   assert.equal(lines.length, 2);

@@ -54,7 +54,7 @@ const isCause = (v: string | undefined): v is Cause => v !== undefined && (CAUSE
 
 // Collapsible sections (static/fold.js). Every section is one card whose heading line carries an
 // arrow at its right edge; folded, the card is that one line and the cards below move up. The
-// Nodes card also folds each network group inside it. Ryan approved the testnet mockup for both
+// Nodes card also folds each network group inside it. The operator approved the testnet mockup for both
 // tabs on 2026-11-24. The markup works without the script: every section renders open and the
 // arrows stay hidden (`.fold-js` is set by the script), so a blocked script costs nothing. The
 // script is a file under /static, which the Caddy CSP already allows ('self'); the hash-pinned
@@ -62,20 +62,34 @@ const isCause = (v: string | undefined): v is Cause => v !== undefined && (CAUSE
 const CHEV = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 10.5 8 6l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const foldBtn = (id: string, name: string): string =>
   `<button class="fold" type="button" aria-expanded="true" aria-controls="${esc(id)}-body" aria-label="Collapse ${esc(name)}">${CHEV}</button>`;
+/**
+ * Button hues (operator, 2026-11-26: buttons colored, not all purple, gray, or black and white). Each
+ * c-* class sets --c (text and border), --f (fill when active), and --o (text on the fill); the
+ * values in the style block were checked at 4.5:1 or better in both themes. Hypersnap keeps the
+ * purple it has everywhere else on the page.
+ */
+const netHue = (network: string): string => (/hypersnap/i.test(network) ? "c-purple" : /snapchain/i.test(network) ? "c-teal" : "c-blue");
+
+/** Credit under the title: a native popover, so no script and no change to the CSP hash. */
+const creditHtml = (c: Config["siteCredit"]): string =>
+  c === null
+    ? ""
+    : `<button class="credit" type="button" popovertarget="credit-pop">${esc(c.text)}</button><div id="credit-pop" class="credit-pop" popover><a class="credit-btn hue c-pink" href="${esc(c.quilcastUrl)}" rel="noopener noreferrer" target="_blank">Quilcast</a><a class="credit-btn hue c-blue" href="${esc(c.xUrl)}" rel="noopener noreferrer" target="_blank">X</a></div>`;
+
 /** One collapsible card. `h2Inner` is HTML the caller already escaped (it may carry pills). */
 const sec = (id: string, name: string, h2Inner: string, body: string, headExtra = ""): string =>
   `<section class="card sec fold-box" id="${esc(id)}" data-name="${esc(name)}"><div class="sec-head"><h2>${h2Inner}</h2>${headExtra}${foldBtn(id, name)}</div><div class="sec-body" id="${esc(id)}-body"><div class="sec-in"><div class="sec-pad">
 ${body}</div></div></div></section>`;
 
 /**
- * Overall state of one network's nodes for its letter badge in the Nodes card (Ryan,
+ * Overall state of one network's nodes for its letter badge in the Nodes card (operator,
  * 2026-11-24): green while fewer than 41% of its nodes are down, yellow at 41% or more, red
  * only when none of them answers. A node with no snapshot yet counts as not answering.
  */
 export const networkState = (total: number, down: number): "ok" | "warn" | "bad" =>
   total > 0 && down >= total ? "bad" : total > 0 && down / total >= 0.41 ? "warn" : "ok";
 /**
- * One node's pill (Ryan, 2026-11-25): "down" only when /v1/info gives no usable answer;
+ * One node's pill (operator, 2026-11-25): "down" only when /v1/info gives no usable answer;
  * "degraded" when it answers but a shard is past BEHIND_BLOCK_DELAY or has an open stall
  * (catching up after a restart, or stopped while its peers go on); "up" otherwise. Before
  * this a node 12 h behind and catching up read "up", and the same node read "down" once it
@@ -128,7 +142,9 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     const net = n?.network ?? "";
     const isRef = Object.values(cfg.references).includes(s);
     const role = isRef ? `reference${n?.validator ? " validator" : ""}` : n?.validator ? "validator" : "node";
-    return `<div class="head${isRef ? " ref" : ""}">${esc(net)} ${role}</div>`;
+    // Role only: every card sits under its network's group heading, and the head's color still marks
+    // the network (data-net), so the name here repeated it (operator, 2026-11-26: no redundant information).
+    return `<div class="head${isRef ? " ref" : ""}">${role}</div>`;
   };
   const nodeLabels = cfg.nodes.map((n) => n.label);
   const nets = networks(cfg);
@@ -171,7 +187,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
   app.get("/api/summary", async (c) => {
     const [summary, info, open] = await Promise.all([store.summary(), latestInfos(), store.openStalls()]);
     // meta[label]: what the page prints for each node, so the Telegram bot says the same thing
-    // (Ryan, 2026-11-25): the display name (NODE_<K>_NAME), the role, and the pill state
+    // (operator, 2026-11-25): the display name (NODE_<K>_NAME), the role, and the pill state
     // (nodeState: up, degraded, down, or no data). Before this the bot called a node 16 h
     // behind "up" while the page said "degraded", and used labels where the page shows names.
     const meta = Object.fromEntries(
@@ -310,9 +326,9 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     // tab (/?net=testnet) and nowhere else; everything else is the Mainnet tab (/). The
     // mainnet-only sections (relay counts, split, unexplained, pending) stay off the testnet
     // tab because the relay compares the two mainnets. Tabs are plain links, not script: the
-    // Caddy CSP pins the page's single inline script by hash (test/csp.test.ts). Ryan,
+    // Caddy CSP pins the page's single inline script by hash (test/csp.test.ts). Operator,
     // 2026-11-17: testnet cards inside the mainnet overview were confusing.
-    // A third view, /?view=cards (Ryan, 2026-11-25): every mainnet node card on its own tab,
+    // A third view, /?view=cards (operator, 2026-11-25): every mainnet node card on its own tab,
     // grouped by chain, filtered by ?chain=<network> (anything else shows every chain). The
     // filter is plain links like the tabs, so it survives the 30 s reload and can be shared.
     // The Mainnet tab keeps the index; its rows link here.
@@ -336,7 +352,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     const stateOf = (side: Side, i: InfoSnapshot | null): NodeState => nodeState(i, cfg.behindBlockDelay, i?.shards.some((x) => openStall(side, x.shardId)) ?? false);
     const behindSec = cfg.behindBlockDelay;
     // The header pill counts the open stalls of this tab's nodes only. summary.openStalls is
-    // database-wide, so the Testnet tab was showing mainnet stalls in red (Ryan's screenshot,
+    // database-wide, so the Testnet tab was showing mainnet stalls in red (operator's screenshot,
     // 2026-11-19).
     const openInView = stalls.filter((s) => s.endedAt === null).length;
     const latestByNet = latestVersions(networkMap, infos);
@@ -349,7 +365,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       const m = meshOf(meshAll, side);
       if (m === undefined) return "";
       // Current-set validators only; next-set peers stay in the API (validator false, joinsAt)
-      // and out of the row (Ryan, 2026-11-20: the "(joins at N)" suffixes were noise).
+      // and out of the row (operator, 2026-11-20: the "(joins at N)" suffixes were noise).
       const rows = m.validators.filter((p) => p.validator).map((p) => {
         const name = names.get(p.peerId);
         const text = name ?? `${p.keyPrefix} ${shortPeer(p.peerId)}`;
@@ -388,9 +404,9 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
           .join("") ?? "";
       // Host on its own line, never wrapped: a long host is cut with an ellipsis (full text in
       // the title) instead of breaking mid-word, and "checked" sits on the next line so every
-      // card has the same shape. Ryan, 2026-11-11: a wrapped host pushed the dot onto line two.
+      // card has the same shape. Operator, 2026-11-11: a wrapped host pushed the dot onto line two.
       const host = `${i?.provider ?? (nodeOf(cfg, side)?.private ? side : hostOf(nodeOf(cfg, side)?.url ?? ""))}${(nodeOf(cfg, side)?.providers.length ?? 1) > 1 ? ` (${nodeOf(cfg, side)?.providers.length} providers)` : ""}`;
-      // A card does not fold on its own; only the chain group around it does (Ryan, 2026-11-25:
+      // A card does not fold on its own; only the chain group around it does (operator, 2026-11-25:
       // per-card arrows were not what he asked for and were removed the same day).
       return `<div class="col" id="node-${esc(side)}" data-net="${esc(nodeOf(cfg, side)?.network ?? "")}"${extra ? " data-extra" : " data-pin"}>${headTile(side)}<section class="card">
         <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span></h2>
@@ -433,7 +449,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
     };
     // Each network is a group that folds on its own to one line: the letter badge (H or S,
     // colored by networkState) and the network name. Snapchain sorts below every other network
-    // (Ryan, 2026-11-24); the rest keep config order.
+    // (operator, 2026-11-24); the rest keep config order.
     const indexNets = [...nets].sort((a, b) => Number(a.network.includes("snapchain")) - Number(b.network.includes("snapchain")));
     // One order for a network's nodes everywhere (index rows and cards): the reference first,
     // then validators, then read nodes, each in config order.
@@ -450,7 +466,7 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       return `<span class="nb ${networkState(labels.length, down)}" role="img" aria-label="${esc(stateText)}" title="${esc(stateText)}">${netLetter(network)}</span>`;
     };
     // Node cards grouped by chain in the same order as the index (Hypersnap above Snapchain),
-    // each group folding on its own to its badge and name. Ryan, 2026-11-25: the cards mixed
+    // each group folding on its own to its badge and name. Operator, 2026-11-25: the cards mixed
     // the two chains in config order.
     const cardGroups = (): string =>
       indexNets
@@ -485,13 +501,13 @@ ${indexNets
     // nodes share the remaining slots and page with the arrows. Pure presentation.
     const chainFilter = (): string =>
       `<nav class="jump seg" aria-label="Chain">${indexNets
-        .map(({ network }) => `<a href="/?view=cards&amp;chain=${esc(encodeURIComponent(network))}"${chain === network ? ' class="on" aria-current="page"' : ""}>${esc(network.charAt(0).toUpperCase() + network.slice(1))} only</a>`)
-        .join("")}<a href="/?view=cards"${chain === null ? ' class="on" aria-current="page"' : ""}>Both</a></nav>`;
+        .map(({ network }) => `<a class="hue ${netHue(network)}${chain === network ? ' on" aria-current="page' : ""}" href="/?view=cards&amp;chain=${esc(encodeURIComponent(network))}">${esc(network.charAt(0).toUpperCase() + network.slice(1))} only</a>`)
+        .join("")}<a class="hue c-blue${chain === null ? ' on" aria-current="page' : ""}" href="/?view=cards">Both</a></nav>`;
     const pinnedLabels = nets.map((n) => n.labels[0]).filter((l): l is Side => l !== undefined);
     const extraLabels = nodeLabels.filter((l) => !pinnedLabels.includes(l));
     const extraSet = new Set(extraLabels);
 
-    // Diffs by cause: five number tiles whose explanation shows on hover or focus only (Ryan,
+    // Diffs by cause: five number tiles whose explanation shows on hover or focus only (operator,
     // 2026-11-24: the always-visible help text made the row tall), and a bar per cause as the
     // alternative view, switched by the Chart / Numbers button (static/fold.js remembers it).
     // Bars share one scale from zero; the colors repeat the tiles' (red unexplained, amber
@@ -609,7 +625,7 @@ ${rows === "" ? `<p class="muted">No casts yet. Register an account and post one
         })
         .join("");
 
-    // Page order below the jump links (Ryan, 2026-11-25): one "Node info" card (id nodeinfo) around
+    // Page order below the jump links (operator, 2026-11-25): one "Node info" card (id nodeinfo) around
     // every node-health card (index, the testnet's cards, consensus, stalls), each still folding on
     // its own, so folding Node info leaves Clients as the next open card. The split table counts
     // diffs, so it sits with the diff sections after Clients.
@@ -625,13 +641,13 @@ ${nets
     // One line per node and shard, newest first: its latest stall (any age) plus how many and how
     // long in the last 7 days. A pair with more than one stall opens on click to list them all (<details>:
     // no script, because the page's only inline script is hash-pinned in the Caddy CSP).
-    // Ryan, 2026-11-10: one busy node was filling the whole table.
+    // Operator, 2026-11-10: one busy node was filling the whole table.
     // The first column is at least 210px and clips with an ellipsis: on a phone the 110px column let
-    // "castrater (network-wide)" run under the shard digit (Ryan's screenshot, 2026-11-13).
+    // "castrater (network-wide)" run under the shard digit (operator's screenshot, 2026-11-13).
     // A network-wide row's peer is a clock, not a peering: the healthiest node elsewhere, kept
     // as evidence that time passed (src/stall.ts). When that node sits on the other network
     // kind it is not named on this tab and its height is not shown: a mainnet node and height
-    // on a testnet row read as a crossover (Ryan's screenshot, 2026-11-19). A peer on this
+    // on a testnet row read as a crossover (operator's screenshot, 2026-11-19). A peer on this
     // tab's own kind (hypersnap against snapchain on the Mainnet tab) is shown as before.
     const otherKind = (peer: Side | null): boolean => {
       const n = peer === null ? undefined : nodeOf(cfg, peer);
@@ -675,8 +691,8 @@ ${nets
 <script type="module" src="/static/miniapp.mjs"></script>
 <script src="/static/fold.js"></script>
 <style>
-:root{--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66;--card:#fff;--line:#e3e2dd;--ok:#2f7d4f;--bad:#b3261e;--warn:#9a6700;--fc:#8a63d2;--fc-bg:#f6f2fc;--fc-line:#c9b6ea;--tn:#a855f7;--tn-bg:#f5ecff;--tn-line:#d8b4fe;--link:#1d4ed8}
-@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--muted:#9c9b95;--card:#1d1d1b;--line:#33322f;--ok:#5cc58a;--bad:#f2867c;--warn:#e0b44c;--fc:#8a63d2;--fc-bg:#231c33;--fc-line:#5d4a85;--tn:#b975ff;--tn-bg:#2a1b47;--tn-line:#7a52c4;--link:#9db9ff}}
+:root{--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66;--card:#fff;--line:#e3e2dd;--ok:#2f7d4f;--bad:#b3261e;--warn:#9a6700;--fc:#8a63d2;--fc-bg:#f6f2fc;--fc-line:#c9b6ea;--tn:#a855f7;--tn-bg:#f5ecff;--tn-line:#d8b4fe;--link:#1d4ed8;--brand:#008b8b}
+@media (prefers-color-scheme:dark){:root{--brand:#00ffff;--bg:#141413;--fg:#ecebe6;--muted:#9c9b95;--card:#1d1d1b;--line:#33322f;--ok:#5cc58a;--bad:#f2867c;--warn:#e0b44c;--fc:#8a63d2;--fc-bg:#231c33;--fc-line:#5d4a85;--tn:#b975ff;--tn-bg:#2a1b47;--tn-line:#7a52c4;--link:#9db9ff}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
 a,a:visited{color:var(--link);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--link) 50%,transparent);text-underline-offset:2px}a:hover{text-decoration-color:var(--link)}
 main{max-width:1100px;margin:0 auto;padding:20px 16px}h1{font-size:20px;margin:0 0 4px}h2{font-size:16px;margin:0 0 4px}
@@ -701,7 +717,7 @@ td.text.pre{white-space:pre;font:12px/1.15 ui-monospace,SFMono-Regular,Menlo,Con
 .col{display:flex;flex-direction:column}.card .host{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;margin-bottom:2px}.col .head.ref{font-weight:700;color:var(--fg)}.col .card{border-radius:0 0 10px 10px;flex:1}
 .col[data-net=hypersnap] .head{background:var(--fc);border-color:var(--fc);color:#fff}.col[data-net=hypersnap] .card{background:var(--fc-bg);border-color:var(--fc-line)}
 .col[data-net*=testnet] .head{background:var(--tn);border-color:var(--tn);color:#fff}.col[data-net*=testnet] .card{background:var(--tn-bg);border-color:var(--tn-line)}
-.tabs{display:flex;gap:8px;margin:0 0 12px}.tab{text-decoration:none;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:2px 12px;font-size:13px}.tab.on{color:#fff;background:var(--fc);border-color:var(--fc)}.tab.tn.on{background:var(--tn);border-color:var(--tn)}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}.tab{text-decoration:none;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:2px 12px;font-size:13px}
 .peers .peer.off{color:var(--bad)}.peers .peer.next{color:var(--warn)}.mesh{margin-bottom:4px}
 .jump{position:sticky;top:0;z-index:5;display:flex;gap:6px;overflow-x:auto;padding:8px 0;margin:8px 0 4px;background:var(--bg);border-bottom:1px solid var(--line)}
 .jump a{flex:none;text-decoration:none;color:var(--fg);border:1px solid var(--line);border-radius:99px;padding:3px 12px;font-size:13px;background:var(--card)}
@@ -712,7 +728,7 @@ td.text.pre{white-space:pre;font:12px/1.15 ui-monospace,SFMono-Regular,Menlo,Con
 .sh{border:1px solid var(--line);border-radius:6px;padding:0 6px;font-size:13px;white-space:nowrap}.sh i{font-style:normal;color:var(--muted);margin-right:4px;font-size:11px}.sh.bad{border-color:var(--bad)}.sh.warn{border-color:var(--warn)}
 .back{margin:8px 0 0;font-size:13px}
 /* Node card shard table: tighter cells so three columns fit the 225 px inside a card at the
-   1100 px page width (Ryan, 2026-11-25: text ran past the card's right edge on desktop). */
+   1100 px page width (operator, 2026-11-25: text ran past the card's right edge on desktop). */
 .col .card th,.col .card td{padding:6px 4px;font-variant-numeric:tabular-nums}.col .card th:first-child,.col .card td:first-child{padding-left:0}.col .card th:last-child,.col .card td:last-child{padding-right:0;text-align:right}
 /* Collapsible cards (static/fold.js). The arrow sits at the right edge of each heading line; a folded
    card is that line only, and the cards below move up. Nothing overflows a folded card: its body
@@ -730,7 +746,6 @@ td.text.pre{white-space:pre;font:12px/1.15 ui-monospace,SFMono-Regular,Menlo,Con
 .grp{border:1px solid var(--line);border-radius:8px;margin:10px 0 0}.grp-head{display:flex;align-items:center;gap:8px;min-height:40px;padding:3px 4px 3px 10px}
 .fold-js .grp .fold{width:30px;height:30px}.grp .irows{padding:0 10px 6px}.grp.shut .grp-head h3 .muted{display:none}
 .nb{flex:none;display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;font:700 13px/1 system-ui,sans-serif}
-.seg a.on{color:#fff;background:var(--fc);border-color:var(--fc)}
 #nodeinfo>.sec-body .sec{background:var(--bg)}#nodeinfo>.sec-body .sec:last-child{margin-bottom:0}.cgrp .grid.nodes{margin:0;padding:4px 10px 10px}.nb.ok{background:var(--ok);color:var(--card)}.nb.warn{background:var(--warn);color:var(--card)}.nb.bad{background:var(--bad);color:var(--card)}
 /* Cause tiles: the explanation is a hover or focus tooltip. The open causes card lets it overflow
    its body; while the card moves, the body clips again (.moving, set by the script). */
@@ -743,8 +758,29 @@ td.text.pre{white-space:pre;font:12px/1.15 ui-monospace,SFMono-Regular,Menlo,Con
 .crow{display:grid;grid-template-columns:120px 1fr 56px;gap:10px;align-items:center;font-size:13px}.ck{color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-size:12px}
 .ctrack{height:14px;display:flex;align-items:center}.cbar{display:block;height:10px;border-radius:0 4px 4px 0;background:var(--muted)}.cbar.unexplained{background:var(--bad)}.cbar.pending{background:var(--warn)}
 .cn{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+/* Wordmark (operator's mockup, 2026-11-26): Ubuntu Medium, self-hosted as a glyph subset because the CSP
+   allows fonts from this origin only (static/UBUNTU-FONT-LICENCE.txt). #00ffff is the mockup's color;
+   on the light background it measures 1.17:1, so light mode uses #008b8b (3.86:1, passes the 3:1
+   rule for text this large). */
+@font-face{font-family:"Ubuntu Snapdiff";src:url(/static/ubuntu-m-snapdiff.woff) format("woff");font-weight:500;font-display:swap}
+h1.brand{font:500 44px/1.05 "Ubuntu Snapdiff",Ubuntu,system-ui,sans-serif;color:var(--brand);margin:0;letter-spacing:-.01em}
+.credit{display:block;background:none;border:0;padding:2px 0;margin:2px 0 12px;font:12px/1.4 system-ui,sans-serif;color:var(--muted);cursor:pointer}
+.credit:hover{text-decoration:underline;text-underline-offset:2px}.credit:focus-visible,a.hue:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+.credit-pop{border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:14px;gap:8px;box-shadow:0 6px 24px rgb(0 0 0/.25)}
+.credit-pop:popover-open{display:flex}.credit-pop::backdrop{background:rgb(0 0 0/.3)}
+.credit-btn{text-decoration:none;border:1px solid;border-radius:99px;padding:6px 18px;font-size:14px;font-weight:600}
+/* Button hues. Light values: text on the 10% tint 4.6:1 or more, text on the fill 5.2:1 or more.
+   Dark values: 6.9:1 or more on both. No status colors (ok green, bad red, warn amber), so a button
+   never reads as a health signal. */
+.c-cyan{--c:#0e7490;--f:#00ffff;--o:#141413}.c-blue{--c:#1d4ed8;--f:#1d4ed8;--o:#fff}.c-purple{--c:#7e22ce;--f:#7e22ce;--o:#fff}
+.c-teal{--c:#0f766e;--f:#0f766e;--o:#fff}.c-orange{--c:#9a3412;--f:#9a3412;--o:#fff}.c-pink{--c:#be185d;--f:#be185d;--o:#fff}
+@media (prefers-color-scheme:dark){.c-cyan{--c:#67e8f9;--f:#00ffff;--o:#141413}.c-blue{--c:#93c5fd;--f:#93c5fd;--o:#141413}.c-purple{--c:#d8b4fe;--f:#d8b4fe;--o:#141413}
+.c-teal{--c:#5eead4;--f:#5eead4;--o:#141413}.c-orange{--c:#fdba74;--f:#fdba74;--o:#141413}.c-pink{--c:#f9a8d4;--f:#f9a8d4;--o:#141413}}
+a.hue,a.hue:visited{color:var(--c);border-color:var(--c);background:color-mix(in srgb,var(--c) 10%,var(--card));text-decoration:none}
+a.hue:hover{text-decoration:underline;text-underline-offset:3px}
+a.hue.on,a.hue.on:visited{color:var(--o);background:var(--f);border-color:var(--f);font-weight:600}
 @media (prefers-reduced-motion:reduce){.sec-body,.fold svg{transition:none!important}}
-@media (max-width:640px){main{padding:12px 10px}h1{font-size:17px}
+@media (max-width:640px){main{padding:12px 10px}h1{font-size:17px}h1.brand{font-size:34px}
 .stats{grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:10px 0}.stat{padding:8px 4px;text-align:center}.stat .n{font-size:20px}.stat .k{font-size:9px;letter-spacing:0}.stat{position:static}.stats{position:relative}.crow{grid-template-columns:96px 1fr 44px}
 .irow,.irow:visited{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"name pill ver" "role sh sh";padding:8px 2px}.iname{grid-area:name}.irow .pill{grid-area:pill}.iver{grid-area:ver;text-align:right}.irole{grid-area:role}.ish{grid-area:sh}
 .nodes{grid-template-columns:1fr}}
@@ -752,23 +788,24 @@ td.text.pre{white-space:pre;font:12px/1.15 ui-monospace,SFMono-Regular,Menlo,Con
 .pager button{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:2px 10px;font:inherit;cursor:pointer}
 .pager button:disabled{opacity:.4;cursor:default}
 </style></head><body><main>
-<h1>snapdiff${view === "testnet" ? " testnet" : view === "cards" ? " node cards" : ""}: ${(view === "cards" ? indexNets : nets).map(({ network, labels }) => `${esc(network)} (${labels.length} node${labels.length === 1 ? "" : "s"})`).join(view === "cards" ? " and " : " vs ")}</h1>
-<nav class="tabs"><a class="tab${view === "mainnet" ? " on" : ""}" href="/">Mainnet (${allNets.filter((n) => !isTestnet(n.network)).reduce((t, n) => t + n.labels.length, 0)} nodes)</a><a class="tab${view === "cards" ? " on" : ""}" href="/?view=cards">Node cards</a>${
+<h1 class="brand">Snapdiff</h1>
+${creditHtml(cfg.siteCredit)}
+<nav class="tabs"><a class="tab hue c-cyan${view === "mainnet" ? " on" : ""}" href="/">Mainnet (${allNets.filter((n) => !isTestnet(n.network)).reduce((t, n) => t + n.labels.length, 0)} nodes)</a><a class="tab hue c-blue${view === "cards" ? " on" : ""}" href="/?view=cards">Node cards</a>${
   hasTestnet
-    ? `<a class="tab tn${view === "testnet" ? " on" : ""}" href="/?net=testnet">Testnet (${allNets.filter((n) => isTestnet(n.network)).reduce((t, n) => t + n.labels.length, 0)} nodes)</a>`
+    ? `<a class="tab hue c-purple${view === "testnet" ? " on" : ""}" href="/?net=testnet">Testnet (${allNets.filter((n) => isTestnet(n.network)).reduce((t, n) => t + n.labels.length, 0)} nodes)</a>`
     : ""
 }</nav>
 ${
   view === "cards"
-    ? `<p class="muted">Every mainnet node's card, grouped by chain. Show one chain or both. This page reloads every 30 s. Read-only.</p>
+    ? `<p class="muted">Mainnet nodes only. This page reloads every 30 s. Read-only.</p>
 ${chainFilter()}
 ${cardGroups()}`
     : view === "mainnet"
     ? `<p class="muted">Scans run every ${Math.round(cfg.scanIntervalMs / 60000)} min: ${summary.scans} so far, last ${ago(summary.lastScanAt, now)}, next in about ${nextScanIn(summary.lastScanAt, cfg.scanIntervalMs, now)}. This page reloads every 30 s. Read-only.</p>
 ${causesHtml()}`
-    : `<p class="muted">Node health and shard stalls for the testnet. The cast relay comparison on the Mainnet tab does not apply here. This page reloads every 30 s. Read-only.</p>`
+    : `<p class="muted">The cast relay comparison on the Mainnet tab does not apply here. This page reloads every 30 s. Read-only.</p>`
 }
-${view === "cards" ? "" : `<nav class="jump" aria-label="Sections"><a href="#index">Nodes</a>${view === "testnet" ? `<a href="#nodes">Cards</a>` : ""}${consensusHtml(nets.map((n) => n.network)) ? `<a href="#consensus">Consensus</a>` : ""}<a href="#stalls">Stalls</a>${(clients?.() ?? []).some((h) => isTestnet(h.network) === (view === "testnet")) ? `<a href="#clients">Clients</a>` : ""}</nav>
+${view === "cards" ? "" : `<nav class="jump" aria-label="Sections">${view === "testnet" ? `<a class="hue c-blue" href="#nodes">Cards</a>` : ""}${(clients?.() ?? []).some((h) => isTestnet(h.network) === (view === "testnet")) ? `<a class="hue c-orange" href="#clients">Clients</a>` : ""}${consensusHtml(nets.map((n) => n.network)) ? `<a class="hue c-teal" href="#consensus">Consensus</a>` : ""}<a class="hue c-pink" href="#stalls">Stalls</a></nav>
 `}
 <script>
 (function(){

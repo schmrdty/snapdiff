@@ -1,5 +1,5 @@
 // Testnet cast explorer. The Testnet tab lists the newest casts on each testnet network so
-// an operator or app developer can see that their post landed, without a client. Ryan,
+// an operator or app developer can see that their post landed, without a client. Operator,
 // 2026-11-18.
 //
 // Source: the network's reference node, hub API only (works with `[api]` off):

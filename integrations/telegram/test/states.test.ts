@@ -1,4 +1,4 @@
-// The bot says what the dashboard says (Ryan, 2026-11-25): its states (up, degraded, down)
+// The bot says what the dashboard says (operator, 2026-11-25): its states (up, degraded, down)
 // from /api/summary meta, its names (NODE_<K>_NAME), its order (Snapchain last; reference,
 // validators, read nodes), its delay format, and every node in /status (it stopped at 12).
 import { test } from 'node:test';

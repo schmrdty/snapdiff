@@ -1,6 +1,6 @@
 // Collapsible cards for the dashboard (src/server.ts, `sec` and the Nodes groups). Loaded from
 // /static because the Caddy CSP allows script files from this origin ('self') and pins the one
-// inline script by hash; nothing here is inline. Ryan approved the design on 2026-11-24.
+// inline script by hash; nothing here is inline. The operator approved the design on 2026-11-24.
 //
 // Runs twice:
 // 1. In <head>, before the body exists: marks the page as scripted (the arrows appear) and hides
@@ -33,7 +33,7 @@
   document.addEventListener("DOMContentLoaded", function () {
     var boxes = [].slice.call(document.querySelectorAll(".fold-box[id]"));
     // A box's own arrow is the one that controls its body (a section's head, a group's head line),
-    // matched on aria-controls rather than position. Node cards do not fold (Ryan, 2026-11-25).
+    // matched on aria-controls rather than position. Node cards do not fold (operator, 2026-11-25).
     function btnOf(box) { return box.querySelector('.fold[aria-controls="' + box.id + '-body"]'); }
     function setShut(box, isShut, save) {
       var b = btnOf(box);

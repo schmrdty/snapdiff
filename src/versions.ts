@@ -2,7 +2,7 @@
 // the reachable nodes that report one is "latest", and a node below it is "behind". There is
 // no release feed to ask, so "latest" means "newest anyone on this network runs": a node on a
 // nightly build makes everyone else read behind, which is the honest reading.
-// Ryan, 2026-11-12: the Hypersnap fork that day stranded nodes one release behind; a card line
+// Operator, 2026-11-12: the Hypersnap fork that day stranded nodes one release behind; a card line
 // and a bot message before the fork height are cheaper than the stall after it.
 import type { InfoSnapshot, Side } from "./types.js";
 

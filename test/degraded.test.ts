@@ -1,4 +1,4 @@
-// Degraded (Ryan, 2026-11-25): a node that answers /v1/info but is past BEHIND_BLOCK_DELAY, or
+// Degraded (operator, 2026-11-25): a node that answers /v1/info but is past BEHIND_BLOCK_DELAY, or
 // has an open stall, reads "degraded" (yellow), not "up" and not "down". Down stays for a node
 // that gives no usable answer. Degraded counts as answering in the badge, uptime, and the API.
 import { test } from "node:test";

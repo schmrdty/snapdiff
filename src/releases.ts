@@ -1,6 +1,6 @@
 // Published releases. src/versions.ts answers "what is the newest version anyone on this
 // network runs"; this file answers "what is the newest version the project has published",
-// which is the earlier signal. Ryan, 2026-11-14: four Hypersnap patches shipped in one
+// which is the earlier signal. Operator, 2026-11-14: four Hypersnap patches shipped in one
 // afternoon and the bot only spoke once another node had pulled each one.
 //
 // The feed is a Docker Hub tag list. Hypersnap has no GitHub releases or tags for 0.17.x

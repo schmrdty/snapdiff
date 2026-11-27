@@ -19,7 +19,7 @@ const subsFile = process.env.SUBSCRIPTIONS_FILE ?? `${process.env.STATE_DIRECTOR
 const subs = new SubStore(subsFile);
 // Quiet timers next to the subscriptions, so they outlive a restart (see loadQuiet).
 const quietFile = process.env.QUIET_FILE ?? `${process.env.STATE_DIRECTORY ?? '.'}/quiet.json`;
-// Per-user reply spacing. 20 s read as the bot ignoring people in a busy group; 12 s still blocks a flood (Ryan, 2026-11-13).
+// Per-user reply spacing. 20 s read as the bot ignoring people in a busy group; 12 s still blocks a flood (operator, 2026-11-13).
 const LIMIT_MS = 12_000;
 const HELP: Record<string, string> = {
   help: 'commands: /snapdiff network summary, /status every node and client, /consensus validators able to vote per shard, /fid 123 open diffs for one FID, /node LABEL one node over 24 h, /subscribe LABEL node events by DM, /unsubscribe, /feedback your note, /tip. Add "is <node or client> down" to /snapdiff to check one. Reply "stop" to mute me for you.',

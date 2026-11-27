@@ -29,13 +29,13 @@ test("tabs: testnet nodes appear only on /?net=testnet, mainnet sections stay of
   const summary = (await (await app.request("http://x/api/summary")).json()) as { nodes: string[] };
   await store.close();
 
-  assert.match(main, /<h1>snapdiff: snapchain \(1 node\) vs hypersnap \(1 node\)<\/h1>/, "the mainnet title counts mainnet networks only");
-  assert.match(main, /<nav class="tabs"><a class="tab on" href="\/">Mainnet \(2 nodes\)<\/a><a class="tab" href="\/\?view=cards">Node cards<\/a><a class="tab tn" href="\/\?net=testnet">Testnet \(2 nodes\)<\/a><\/nav>/);
+  assert.match(main, /<h1 class="brand">Snapdiff<\/h1>/, "the title is the wordmark only; node counts live on the tabs");
+  assert.match(main, /<nav class="tabs"><a class="tab hue c-cyan on" href="\/">Mainnet \(2 nodes\)<\/a><a class="tab hue c-blue" href="\/\?view=cards">Node cards<\/a><a class="tab hue c-purple" href="\/\?net=testnet">Testnet \(2 nodes\)<\/a><\/nav>/, "the mainnet tab counts mainnet nodes only");
   assert.doesNotMatch(main, /data-net="hypersnap-testnet"/, "no testnet card on the mainnet tab");
   assert.match(main, /<div class="stats">/, "relay counts stay on mainnet");
 
-  assert.match(testnet, /<h1>snapdiff testnet: hypersnap-testnet \(2 nodes\)<\/h1>/);
-  assert.match(testnet, /<a class="tab tn on" href="\/\?net=testnet">/);
+  assert.match(testnet, /<h1 class="brand">Snapdiff<\/h1>/);
+  assert.match(testnet, /<a class="tab hue c-purple on" href="\/\?net=testnet">/);
   assert.equal((testnet.match(/data-net="hypersnap-testnet"/g) ?? []).length, 2, "both testnet cards");
   assert.doesNotMatch(testnet, /data-net="hypersnap"/, "no mainnet card on the testnet tab");
   assert.doesNotMatch(testnet, /<div class="stats">|<h2>Network split<\/h2>|<h2>Unexplained<\/h2>|<h2>Pending<\/h2>/, "mainnet-only sections are absent");
@@ -52,12 +52,12 @@ test("tabs: no Testnet tab without a testnet network, and ?net=testnet falls bac
   const main = await (await app.request("http://x/")).text();
   const forced = await (await app.request("http://x/?net=testnet")).text();
   await store.close();
-  assert.match(main, /<nav class="tabs"><a class="tab on" href="\/">Mainnet \(2 nodes\)<\/a><a class="tab" href="\/\?view=cards">Node cards<\/a><\/nav>/, "Mainnet and Node cards only");
-  assert.match(forced, /<h1>snapdiff: snapchain \(1 node\) vs hypersnap \(1 node\)<\/h1>/);
+  assert.match(main, /<nav class="tabs"><a class="tab hue c-cyan on" href="\/">Mainnet \(2 nodes\)<\/a><a class="tab hue c-blue" href="\/\?view=cards">Node cards<\/a><\/nav>/, "Mainnet and Node cards only");
+  assert.match(forced, /<a class="tab hue c-cyan on" href="\/">/, "falls back to the mainnet view");
 });
 
 test("tabs: the stall pill and the stall rows carry this tab's networks only; a testnet-wide row never names a mainnet node", async () => {
-  // Ryan's screenshot, 2026-11-19: the Testnet tab showed "3 ongoing" in red for three open
+  // Operator's screenshot, 2026-11-19: the Testnet tab showed "3 ongoing" in red for three open
   // mainnet stalls, and its own rows read "Compared with snapchain".
   const cfg = {
     ...loadConfig(),
@@ -108,7 +108,7 @@ test("node index: every node of the view is listed once and links to a card that
   const index = html.slice(html.indexOf('id="index"'), html.indexOf('id="stalls"'));
   // Since 2026-11-25 the cards live on the Node cards tab; each index row opens its card there.
   const links = [...index.matchAll(/<a class="irow" href="\/\?view=cards#node-([^"]+)"/g)].map((m) => decodeURIComponent(m[1]!));
-  // Snapchain sorts below Hypersnap (Ryan, 2026-11-24); within a network: reference, validators, read nodes.
+  // Snapchain sorts below Hypersnap (operator, 2026-11-24); within a network: reference, validators, read nodes.
   assert.deepEqual(links, ["hypersnap", "val.two", "reader", "snapchain"], "hypersnap group first, snapchain below it; testnet nodes stay on their tab");
   for (const l of links) assert.ok(cards.includes(`<div class="col" id="node-${l}"`), `card for ${l} is on the Node cards tab`);
   assert.ok(!html.includes('<div class="col'), "no card on the Mainnet tab");

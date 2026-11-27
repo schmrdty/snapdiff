@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 // Event subscriptions: a private chat asks to be told when a node changes state. Deliberately
-// small for the first release (Ryan, 2026-11-10: "limit them heavily for now"):
+// small for the first release (operator, 2026-11-10: "limit them heavily for now"):
 //   - private chats only, so a group can never be flooded by one member's choice;
 //   - at most MAX_LABELS_PER_CHAT labels per chat and MAX_CHATS chats in total;
 //   - one poll a minute against the public API, and no poll at all while nobody subscribes;
@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 //     A stall on every node of the network is worded as the network's pause, without the
 //     label, so a chat following two nodes of one network reads it once.
 // The file holds chat ids and labels, nothing else (no names, no text).
-// 7 since 2026-11-22 (Ryan): three was too few to follow one operator's nodes plus the
+// 7 since 2026-11-22 (operator): three was too few to follow one operator's nodes plus the
 // reference nodes; the per-poll send cap and the quiet period still bound the volume.
 export const MAX_LABELS_PER_CHAT = 7;
 export const MAX_CHATS = 25;
@@ -109,7 +109,7 @@ export function diffEvents(label: string, prev: NodeState | undefined, next: Nod
   // A node that comes back behind (a restart, catching up) says so, as its yellow pill does.
   if (prev.reachable === false && next.reachable === true) out.push({ label, kind: 'up', text: `${who}: back up${next.degraded === true ? `, still catching up${delayPart(next)}` : ''}` });
   // Degraded and caught up, while answering on both polls. A stall has its own events, so these
-  // fire only when no shard of the node is stalled (Ryan, 2026-11-25).
+  // fire only when no shard of the node is stalled (operator, 2026-11-25).
   if (prev.reachable === true && next.reachable === true && prev.degraded === false && next.degraded === true && next.stalledShards.length === 0) out.push({ label, kind: 'degraded', text: `${who}: degraded, answering but behind${delayPart(next)}` });
   if (prev.reachable === true && next.reachable === true && prev.degraded === true && next.degraded === false && prev.stalledShards.length === 0) out.push({ label, kind: 'caught-up', text: `${who}: caught up${delayPart(next)}` });
   const netWide = (st: NodeState, s: number) => st.networkStalledShards.includes(s);
@@ -126,7 +126,7 @@ export function diffEvents(label: string, prev: NodeState | undefined, next: Nod
   if (isBehind(prev) && !isBehind(next) && next.version !== null) out.push({ label, kind: 'current', text: `${who}: version ${next.version}, current again` });
   // Release published: the project pushed a newer version than this node runs. Fires once per
   // new published version, the earlier signal than "behind", which waits for a peer to upgrade.
-  // Ryan, 2026-11-14: four patches in one afternoon and nothing said so until a peer pulled each.
+  // Operator, 2026-11-14: four patches in one afternoon and nothing said so until a peer pulled each.
   // A node already on the published version hears nothing; an unknown node version still fires.
   if (next.published !== null && (prev.published === null || compareVersions(next.published, prev.published) > 0) && (next.version === null || compareVersions(next.version, next.published) < 0)) out.push({ label, kind: 'release', text: `${next.network} ${next.published} published, ${label} runs ${next.version ?? 'an unknown version'}` });
   return out;
@@ -142,7 +142,7 @@ export function allow(quiet: Map<string, number>, e: Event, now: number): boolea
 
 // The quiet timers are kept on disk so a restart (a deploy, a crash) does not reopen every
 // window: before 2026-11-25 a node flapping across a restart was announced again at once
-// (Ryan, 2026-11-25: "I need the quiet timers that stop alerts repeating"). The file holds
+// (operator, 2026-11-25: "I need the quiet timers that stop alerts repeating"). The file holds
 // "label:kind" keys and expiry times in ms, nothing else. Expired entries are dropped on load
 // and on save, and an expiry further out than QUIET_MS is treated as corrupt and ignored.
 const QUIET_KEY = /^[\w.-]{1,40}:[a-z-]{1,16}$/;

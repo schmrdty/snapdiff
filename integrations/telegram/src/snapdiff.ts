@@ -18,7 +18,7 @@ const age = (t: number | null, now: number) => t == null ? 'never' : `${Math.max
 const versionText = (v: NodeVersion | undefined) => v && typeof v.current === 'string' ? `, v${safe(v.current)}${v.behind && v.latest ? ` (behind, newest ${safe(v.latest)})` : ''}` : '';
 const UNAVAILABLE = `snapdiff api unavailable\n${DASHBOARD}`;
 /**
- * The dashboard's words for a node, and its verdict (Ryan, 2026-11-25): snapdiff computes the
+ * The dashboard's words for a node, and its verdict (operator, 2026-11-25): snapdiff computes the
  * state (src/server.ts nodeState, sent as /api/summary meta and /api/node state) and the bot
  * repeats it instead of re-deriving it. "degraded" = answering but a shard is past the
  * dashboard's behind line or stalled. An older API without the field falls back to

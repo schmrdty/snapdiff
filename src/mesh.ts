@@ -1,7 +1,7 @@
 // Peer view of a node, from /v1/currentPeers. /v1/info says whether a node's heights move;
 // the peer view says who it is connected to, which of those are validators, which validators
 // of the current set it is NOT connected to, and whether it is itself a validator. That is the
-// question a client or bot asks before switching nodes (Ryan, 2026-11-19).
+// question a client or bot asks before switching nodes (operator, 2026-11-19).
 //
 // Until 2026-11-20 this read /v1/mesh, which classifies validators for us but sits behind
 // admin_rpc_auth and is closed on some nodes (haatz). currentPeers is the ordinary API and

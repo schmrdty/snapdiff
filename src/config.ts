@@ -36,7 +36,7 @@ export interface NodeConfig {
   /**
    * The node is a validator (it signs blocks), not a read-only node. Only the wording changes:
    * the header tile, /api/node and the Telegram /node line say "validator" instead of "node".
-   * Absent means read-only. Ryan, 2026-11-10: operators asked to see the two kinds apart.
+   * Absent means read-only. Operator, 2026-11-10: operators asked to see the two kinds apart.
    */
   validator?: boolean;
 }
@@ -110,6 +110,12 @@ export interface Config {
   clientHealthFile: string;
   /** Optional credit line under the Clients card: where the list of clients came from. Text plus an https link, both or neither. */
   clientHealthCredit: { text: string; url: string } | null;
+  /**
+   * Optional credit line under the dashboard's "Snapdiff" title (operator, 2026-11-26): the operator's
+   * own profiles, opened from a small popup. The text is a handle, never a personal name
+   * (workspace hard rule 2). All three or none; none hides the line.
+   */
+  siteCredit: { text: string; quilcastUrl: string; xUrl: string } | null;
   clientHealthIntervalMs: number;
   /**
    * Release feed per network (src/releases.ts): a Docker Hub tag-list URL whose newest
@@ -122,7 +128,7 @@ export interface Config {
   testnetFeedIntervalMs: number;
   /**
    * Which networks get the peer view (src/mesh.ts): "testnet", "mainnet", both, or none.
-   * MESH_NETWORKS, default "testnet": the feature is staged on the testnet first (Ryan,
+   * MESH_NETWORKS, default "testnet": the feature is staged on the testnet first (operator,
    * 2026-11-19); mainnet nodes join when the operator writes "mainnet,testnet".
    */
   meshNetworks: MeshKind[];
@@ -326,6 +332,7 @@ export function loadConfig(): Config {
     providerRetryMs: num("PROVIDER_RETRY_MIN", 10) * min,
     clientHealthFile: str("CLIENT_HEALTH_FILE", ""),
     clientHealthCredit: parseCredit(str("CLIENT_HEALTH_CREDIT_TEXT", ""), str("CLIENT_HEALTH_CREDIT_URL", "")),
+    siteCredit: parseSiteCredit(str("SITE_CREDIT_TEXT", ""), str("SITE_CREDIT_QUILCAST_URL", ""), str("SITE_CREDIT_X_URL", "")),
     clientHealthIntervalMs: num("CLIENT_HEALTH_INTERVAL_SEC", 60) * 1000,
     releaseFeeds: loadReleaseFeeds(nodes.map((n) => n.network)),
     releaseIntervalMs: num("RELEASE_INTERVAL_MIN", 10) * min,
@@ -376,14 +383,30 @@ export function parseCredit(text: string, url: string): { text: string; url: str
   if (t === "" && u === "") return null;
   if (t === "" || u === "") throw new Error("CLIENT_HEALTH_CREDIT_TEXT and CLIENT_HEALTH_CREDIT_URL must be set together");
   if (t.length > 120) throw new Error("CLIENT_HEALTH_CREDIT_TEXT must be at most 120 characters");
+  return { text: t, url: httpsUrl(u, "CLIENT_HEALTH_CREDIT_URL") };
+}
+
+/** One rule for every credit link: https, no username or password. Returns the normalized URL. */
+function httpsUrl(value: string, key: string): string {
   let parsed: URL;
   try {
-    parsed = new URL(u);
+    parsed = new URL(value);
   } catch {
-    throw new Error("CLIENT_HEALTH_CREDIT_URL must be an https URL");
+    throw new Error(`${key} must be an https URL`);
   }
-  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new Error("CLIENT_HEALTH_CREDIT_URL must be an https URL");
-  return { text: t, url: parsed.toString() };
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new Error(`${key} must be an https URL`);
+  return parsed.toString();
+}
+
+/** SITE_CREDIT_TEXT, _QUILCAST_URL and _X_URL: set all three (https only, text at most 60 characters) or none. */
+export function parseSiteCredit(text: string, quilcast: string, x: string): { text: string; quilcastUrl: string; xUrl: string } | null {
+  const t = text.trim();
+  const q = quilcast.trim();
+  const u = x.trim();
+  if (t === "" && q === "" && u === "") return null;
+  if (t === "" || q === "" || u === "") throw new Error("SITE_CREDIT_TEXT, SITE_CREDIT_QUILCAST_URL and SITE_CREDIT_X_URL must be set together");
+  if (t.length > 60) throw new Error("SITE_CREDIT_TEXT must be at most 60 characters");
+  return { text: t, quilcastUrl: httpsUrl(q, "SITE_CREDIT_QUILCAST_URL"), xUrl: httpsUrl(u, "SITE_CREDIT_X_URL") };
 }
 
 /** Upstream Hypersnap mainnet file; a testnet or another network adds its own entry. */
