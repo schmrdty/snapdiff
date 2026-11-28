@@ -73,7 +73,7 @@
       });
     }
 
-    // A jump link, an index row, or "all nodes" pointing into a folded card opens every card
+    // A jump link or an index row pointing into a folded card opens every card
     // around the target first.
     function openFor(hash) {
       if (!hash || hash.length < 2) return;

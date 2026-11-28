@@ -100,7 +100,7 @@ test("Node cards tab: hypersnap group above snapchain, the chain filter, and eve
   assert.match(both, /<div class="col" id="node-ohsnap"[^>]*><div class="head">node<\/div><section class="card">\s*<h2>ohsnap <span class="pill ok">up<\/span><\/h2>/, "a card has no arrow of its own");
   assert.ok(!both.includes('aria-controls="node-'), "no per-card fold (operator, 2026-11-25)");
   assert.match(both, /aria-controls="cards-hypersnap-body"/, "the chain group still folds");
-  assert.match(both, /<a href="\/#index">all nodes<\/a>/, "back to the index on the Mainnet tab");
+  assert.ok(!both.includes(">all nodes</a>"), "no per-card link back to the index (operator, 2026-11-27)");
   assert.ok(!sc.includes('id="cards-hypersnap"') && sc.includes('id="cards-snapchain"'), "Snapchain only");
   assert.match(sc, /<a class="hue c-teal on" aria-current="page" href="\/\?view=cards&amp;chain=snapchain">Snapchain only<\/a>/);
   assert.ok(junk.includes('id="cards-hypersnap"') && junk.includes('id="cards-snapchain"'), "an unknown chain shows both");

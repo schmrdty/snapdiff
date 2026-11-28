@@ -407,7 +407,9 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
       // card has the same shape. Operator, 2026-11-11: a wrapped host pushed the dot onto line two.
       const host = `${i?.provider ?? (nodeOf(cfg, side)?.private ? side : hostOf(nodeOf(cfg, side)?.url ?? ""))}${(nodeOf(cfg, side)?.providers.length ?? 1) > 1 ? ` (${nodeOf(cfg, side)?.providers.length} providers)` : ""}`;
       // A card does not fold on its own; only the chain group around it does (operator, 2026-11-25:
-      // per-card arrows were not what he asked for and were removed the same day).
+      // per-card arrows were not what was asked for and were removed the same day).
+      // No "all nodes" link per card (operator, 2026-11-27): the same link repeated on every card;
+      // the tabs and the browser's back button already return to the index.
       return `<div class="col" id="node-${esc(side)}" data-net="${esc(nodeOf(cfg, side)?.network ?? "")}"${extra ? " data-extra" : " data-pin"}>${headTile(side)}<section class="card">
         <h2>${esc(label(side))} <span class="pill ${cls}">${status}</span></h2>
         <p class="muted host" title="${esc(host)}">${esc(host)}</p>
@@ -418,7 +420,6 @@ export function buildApp(cfg: Config, store: Store, clients?: () => ClientHealth
         ${status === "degraded" && i ? `<p class="warn">${(i.maxBlockDelay ?? 0) > behindSec ? `${fmtDelay(i.maxBlockDelay ?? 0)} behind` : "Shard stalled"}</p>` : ""}
         ${i?.error ? `<p class="bad-text">${esc(i.error)}</p>` : ""}
         ${shards ? `<table><thead><tr><th>Shard</th><th>Height</th><th>Block delay</th></tr></thead><tbody>${shards}</tbody></table>` : ""}
-        <p class="muted back"><a href="${view === "cards" ? "/#index" : "#index"}">all nodes</a></p>
       </section></div>`;
     };
 
@@ -726,7 +727,6 @@ td.text.pre{white-space:pre;font:12px/1.15 ui-monospace,SFMono-Regular,Menlo,Con
 .irow:hover{background:color-mix(in srgb,var(--line) 45%,transparent)}.iname{font-weight:600;color:var(--link);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.irow .pill{justify-self:start}
 .iver,.irole{color:var(--muted);font-size:13px;white-space:nowrap}.iver.bad{color:var(--bad)}.ish{display:flex;gap:6px;justify-content:flex-end;font-variant-numeric:tabular-nums}
 .sh{border:1px solid var(--line);border-radius:6px;padding:0 6px;font-size:13px;white-space:nowrap}.sh i{font-style:normal;color:var(--muted);margin-right:4px;font-size:11px}.sh.bad{border-color:var(--bad)}.sh.warn{border-color:var(--warn)}
-.back{margin:8px 0 0;font-size:13px}
 /* Node card shard table: tighter cells so three columns fit the 225 px inside a card at the
    1100 px page width (operator, 2026-11-25: text ran past the card's right edge on desktop). */
 .col .card th,.col .card td{padding:6px 4px;font-variant-numeric:tabular-nums}.col .card th:first-child,.col .card td:first-child{padding-left:0}.col .card th:last-child,.col .card td:last-child{padding-right:0;text-align:right}
